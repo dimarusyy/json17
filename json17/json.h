@@ -3,6 +3,7 @@
 #include "config.h"
 
 #include <boost/variant.hpp>
+#include <boost/algorithm/string.hpp>
 #include <initializer_list>
 #include <vector>
 #include <exception>
@@ -157,7 +158,18 @@ namespace json17
 		template <typename R>
 		R get_value(const config::string_t& path, R def = R{}) const
 		{
-			return get(path).get_value<R>(def);
+			std::vector<config::string_t> v_path;
+			boost::split(v_path, path, boost::is_any_of(config::string_t(".")));
+			if (v_path.size() == 1)
+			{
+				return get(path).get_value<R>(def);
+			}
+			else
+			{
+				auto val = get(*std::begin(v_path));
+				v_path.erase(std::begin(v_path));
+				return val.get_value<object_t>().get_value<R>(boost::join(v_path, config::string_t(".")), def);
+			}
 		}
 
 	private:
