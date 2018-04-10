@@ -30,8 +30,8 @@ namespace json17
 		template <typename T>
 		using array_t = std::vector<T>;
 
-		template <typename T>
-		using map_t = std::map<string_t, T>;
+		template <typename K, typename V>
+		using map_t = std::map<K, V>;
 
 		//////////////////////////////////////////////////////////////////////////
 	};

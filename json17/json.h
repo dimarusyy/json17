@@ -3,32 +3,24 @@
 #include "config.h"
 
 #include <boost/variant.hpp>
-#include <boost/mpl/joint_view.hpp>
-#include <boost/mpl/copy.hpp>
-
 #include <initializer_list>
 #include <vector>
 #include <exception>
 
 namespace json17
 {
-	//////////////////////////////////////////////////////////////////////////
-
-	namespace mpl = boost::mpl;
 
 	//////////////////////////////////////////////////////////////////////////
 
-	namespace details
+	struct object_t //<name> : <value>
 	{
-		//////////////////////////////////////////////////////////////////////////
-
-
 		struct value_t
 		{
-			using allowed_types = mpl::vector<config::null_t, 
-											  config::boolean_t, config::numeric_t, config::unsigned_t, config::float_t, config::string_t, 
-											  config::array_t<value_t>>;
-			using value_types = typename boost::make_variant_over<allowed_types>::type;
+			using value_types = boost::variant<
+				config::null_t,
+				config::boolean_t, config::numeric_t, config::unsigned_t, config::float_t, config::string_t,
+				boost::recursive_wrapper<object_t>,
+				config::array_t<value_t>>;
 
 			value_t()
 				: _value(config::null_t{})
@@ -37,12 +29,12 @@ namespace json17
 
 			template <typename U>
 			value_t(U val, typename std::enable_if<
-				std::is_same<U, config::null_t>::value or
- 				std::is_same<config::boolean_t, U>::value or
- 				std::is_same<config::numeric_t, U>::value or
- 				std::is_same<config::unsigned_t, U>::value or
- 				std::is_same<config::float_t, U>::value
-				>::type* t = 0)
+				std::is_same<object_t, U>::value or
+				std::is_same<config::null_t, U>::value or
+				std::is_same<config::boolean_t, U>::value or
+				std::is_same<config::numeric_t, U>::value or
+				std::is_same<config::unsigned_t, U>::value or
+				std::is_same<config::float_t, U>::value>::type* t = 0)
 				: _value(std::move(val))
 			{
 			}
@@ -50,8 +42,7 @@ namespace json17
 			template <typename U>
 			value_t(U&& val, typename std::enable_if<
 				not std::is_same<typename std::remove_reference<U>::type, value_t>::value
-				and std::is_convertible<U, config::string_t>::value
-			>::type* = 0)
+				and std::is_convertible<U, config::string_t>::value>::type* = 0)
 				: _value(config::string_t(std::forward<U>(val)))
 			{
 			}
@@ -78,106 +69,95 @@ namespace json17
 			}
 
 			template <typename R>
-			operator R() const 
+			operator R() const
 			{
 				return boost::get<R>(_value);
 			}
 
-			template <typename R>
-			R get() const
+			value_t get(const std::string& path)
 			{
-				return boost::get<R>(_value);
+				return get_value<object_t>().get(path);
+			}
+
+			template <typename R>
+			R get_value(R def = R{}) const
+			{
+				try
+				{
+					return boost::get<R>(_value);
+				}
+				catch (std::exception&)
+				{
+					return def;
+				}
 			}
 
 		private:
 			value_types _value;
 		};
 
-		struct object_base_t //<name> : <value>
+		using holder_t = config::map_t<config::string_t, value_t>;
+
+		object_t() = default;
+
+		// "foo" : true
+		template <typename U>
+		object_t(std::string path, U&& value)
 		{
-			using value_types = boost::variant<value_t, config::map_t<object_base_t>>;
+			add(path, value_t(std::forward<U>(value)));
+		}
 
-			// "foo" : {}
-			object_base_t()
-				: _path(), _obj(config::null_t{})
+		// "foo" : [1, 2, 3]
+		template <typename T>
+		object_t(std::string path, std::initializer_list<T> il)
+		{
+			add(path, value_t(std::begin(il), std::end(il)));
+		}
+
+		// "foo" : { "bar" : 10 }
+		object_t(std::string path, object_t obj)
+		{
+			add(path, value_t(std::move(obj)));
+		}
+
+		// { {"foo" : true}, {"bar" : 4} }
+ 		object_t(std::initializer_list<object_t> il)
+ 		{
+ 			std::for_each(std::begin(il), std::end(il), [this](const auto& v) 
 			{
-			}
+				_pairs.insert(std::begin(v._pairs), std::end(v._pairs));
+			});
+ 		}
 
-			// "foo" : true
-			template <typename U>
-			object_base_t(std::string path, U&& value)
-				: _path(std::move(path)), _obj(std::forward<U>(value))
+		bool operator==(const object_t& other) const
+		{
+			return _pairs == other._pairs;
+		}
+
+		bool operator!=(const object_t& other) const
+		{
+			return !(*this == other);
+		}
+
+
+		void add(std::string key, value_t val)
+		{
+			_pairs.emplace(key, val);
+		}
+
+		value_t get(const std::string& path) const
+		{
+			const auto path_it = _pairs.find(path);
+			if (path_it == _pairs.end())
 			{
+				return value_t{};
 			}
+			return path_it->second;
+		}
 
-			// "foo" : [1, 2, 3]
-			template <typename T>
-			object_base_t(std::string path, std::initializer_list<T> il)
-				: _path(std::move(path)), _obj(value_t(std::begin(il), std::end(il)))
-			{
-			}
-
-			// "foo" : { "bar1" : 10, "bar2" : true}
-			object_base_t(std::string path, std::initializer_list<object_base_t> il)
-				: _path(std::move(path)), _obj(config::map_t<object_base_t>{})
-			{
-				std::for_each(std::begin(il), std::end(il), [this](const auto& v) { add(v); });
-			}
-
-			// "foo" : { "bar" : 10 }
-			object_base_t(std::string path, object_base_t obj)
-				: _path(path), _obj(config::map_t<object_base_t>{})
-			{
-				add(std::move(obj));
-			}
-
-			void add(object_base_t obj)
-			{
-				boost::get<config::map_t<object_base_t>>(_obj).emplace(obj.path(), obj);
-			}
-
-			std::string path() const 
-			{
-				return _path;
-			}
-
-			template <typename R>
-			R get(const std::string& path, R def = R{}) const
-			{
-				if (_path == path)
-				{
-					try
-					{
-						value_t v = boost::get<value_t>(_obj);
-						return v.get<R>();
-					}
-					catch (std::exception&)
-					{
-					}
-				}
-				return def;
-			}
-
-			object_base_t get(const std::string& path, object_base_t def = object_base_t{})
-			{
-				try
-				{
-					auto m = boost::get<config::map_t<object_base_t>>(_obj);
-					return m.at(path);
-				}
-				catch (std::exception&)
-				{
-				}
-				return def;
-			}
-
-		private:
-			std::string _path;
-			value_types _obj;
-		};
-
-		//////////////////////////////////////////////////////////////////////////
-	}
+	private:
+		holder_t _pairs;
+	};
 
 	//////////////////////////////////////////////////////////////////////////
 
@@ -187,9 +167,9 @@ namespace json17
 	using unsigned_t = config::unsigned_t;
 	using float_t = config::float_t;
 	using string_t = config::string_t;
-	using array_t = config::array_t<details::value_t>;
+	using array_t = config::array_t<object_t::value_t>;
 
-	using object_t = details::object_base_t;
+	//////////////////////////////////////////////////////////////////////////
 
 	struct json
 	{
