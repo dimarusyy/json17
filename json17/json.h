@@ -69,14 +69,9 @@ namespace json17
 			}
 
 			template <typename R>
-			operator R() const
+			operator R() const 
 			{
-				return boost::get<R>(_value);
-			}
-
-			value_t get(const std::string& path)
-			{
-				return get_value<object_t>().get(path);
+				return get_value<R>();
 			}
 
 			template <typename R>
@@ -86,7 +81,7 @@ namespace json17
 				{
 					return boost::get<R>(_value);
 				}
-				catch (std::exception&)
+				catch (std::exception & )
 				{
 					return def;
 				}
@@ -102,20 +97,20 @@ namespace json17
 
 		// "foo" : true
 		template <typename U>
-		object_t(std::string path, U&& value)
+		object_t(config::string_t path, U&& value)
 		{
 			add(path, value_t(std::forward<U>(value)));
 		}
 
 		// "foo" : [1, 2, 3]
 		template <typename T>
-		object_t(std::string path, std::initializer_list<T> il)
+		object_t(config::string_t path, std::initializer_list<T> il)
 		{
 			add(path, value_t(std::begin(il), std::end(il)));
 		}
 
 		// "foo" : { "bar" : 10 }
-		object_t(std::string path, object_t obj)
+		object_t(config::string_t path, object_t obj)
 		{
 			add(path, value_t(std::move(obj)));
 		}
@@ -139,13 +134,17 @@ namespace json17
 			return !(*this == other);
 		}
 
-
-		void add(std::string key, value_t val)
+		void add(config::string_t key, value_t val)
 		{
 			_pairs.emplace(key, val);
 		}
 
-		value_t get(const std::string& path) const
+		value_t operator[](const config::string_t& path) const
+		{
+			return get(path);
+		}
+
+		value_t get(const config::string_t& path) const
 		{
 			const auto path_it = _pairs.find(path);
 			if (path_it == _pairs.end())
@@ -153,6 +152,12 @@ namespace json17
 				return value_t{};
 			}
 			return path_it->second;
+		}
+
+		template <typename R>
+		R get_value(const config::string_t& path, R def = R{}) const
+		{
+			return get(path).get_value<R>(def);
 		}
 
 	private:
