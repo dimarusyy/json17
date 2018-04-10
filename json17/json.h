@@ -25,10 +25,15 @@ namespace json17
 
 		struct value_t
 		{
-			using allowed_types = mpl::vector<boost::blank, 
+			using allowed_types = mpl::vector<config::null_t, 
 											  config::boolean_t, config::numeric_t, config::unsigned_t, config::float_t, config::string_t, 
 											  config::array_t<value_t>>;
 			using value_types = typename boost::make_variant_over<allowed_types>::type;
+
+			value_t()
+				: _value(config::null_t{})
+			{
+			}
 
 			template <typename U>
 			value_t(U val, typename std::enable_if<
@@ -85,7 +90,7 @@ namespace json17
 			}
 
 		private:
-			value_types _value{ boost::blank{} };
+			value_types _value;
 		};
 
 		struct object_base_t //<name> : <value>
@@ -112,16 +117,28 @@ namespace json17
 			{
 			}
 
+			// "foo" : { "bar1" : 10, "bar2" : true}
+			object_base_t(std::string path, std::initializer_list<object_base_t> il)
+				: _path(std::move(path)), _obj(config::map_t<object_base_t>{})
+			{
+				std::for_each(std::begin(il), std::end(il), [this](const auto& v) { add(v); });
+			}
+
 			// "foo" : { "bar" : 10 }
 			object_base_t(std::string path, object_base_t obj)
 				: _path(path), _obj(config::map_t<object_base_t>{})
 			{
-				add(_path, std::move(obj));
+				add(std::move(obj));
 			}
 
-			void add(std::string path, object_base_t obj)
+			void add(object_base_t obj)
 			{
-				boost::get<config::map_t<object_base_t>>(_obj).emplace(path, obj);
+				boost::get<config::map_t<object_base_t>>(_obj).emplace(obj.path(), obj);
+			}
+
+			std::string path() const 
+			{
+				return _path;
 			}
 
 			template <typename R>
