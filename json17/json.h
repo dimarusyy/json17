@@ -36,6 +36,12 @@ namespace json17
 		
 			array_t() = default;
 
+			template <typename...Args>
+			array_t(Args...args)
+				: _values(std::initializer_list<value_type>{value_type(args)...})
+			{
+			}
+
 			template <typename T>
 			array_t(std::initializer_list<T> il)
 				: _values(std::begin(il), std::end(il))
@@ -79,7 +85,6 @@ namespace json17
 		template <typename U>
 		object_t(config::string_t path, U&& val,
 				 typename std::enable_if<
-				 std::is_same<object_t, U>::value or
 				 std::is_same<config::null_t, U>::value or
 				 std::is_same<config::boolean_t, U>::value or
 				 std::is_same<config::numeric_t, U>::value or
@@ -97,6 +102,7 @@ namespace json17
 		{
 			add(path, value_type(config::string_t(std::forward<U>(val))));
 		}
+
 		// {  "foo" : [1, 2, 3] }
 		template <typename T>
 		object_t(config::string_t path, std::initializer_list<T> il)
@@ -107,7 +113,7 @@ namespace json17
 		// { "foo" : { "bar" : 10 } }
 		object_t(config::string_t path, object_t obj)
 		{
-			add(path, value_type(obj));
+			add(path, std::move(obj));
 		}
 
 		// { {"foo" : true}, {"bar" : 4} }
@@ -136,16 +142,22 @@ namespace json17
 
 		value_type operator[](const config::string_t& path) const
 		{
-			return get(path);
+			const auto path_it = _pairs.find(path);
+			if (path_it == _pairs.end())
+			{
+				return config::null_t{};
+			}
+			return path_it->second;
 		}
 
-		value_type get(const config::string_t& path) const
+		value_type& operator[](const config::string_t& path)
 		{
 			const auto path_it = _pairs.find(path);
 			if (path_it == _pairs.end())
 			{
-				return value_type{};
-			}
+				_pairs[path] = value_type{};
+				return _pairs[path];
+			};
 			return path_it->second;
 		}
 
@@ -158,11 +170,11 @@ namespace json17
 				boost::split(v_path, path, boost::is_any_of(config::string_t(".")));
 				if (v_path.size() == 1)
 				{
-					return boost::get<R>(get(path));
+					return boost::get<R>(operator[](path));
 				}
 				else
 				{
-					auto val = get(*std::begin(v_path));
+					auto val = operator[](*std::begin(v_path));
 					v_path.erase(std::begin(v_path));
 					return boost::get<object_t>(val).get_value<R>(boost::join(v_path, config::string_t(".")), def);
 				}
@@ -200,7 +212,6 @@ namespace json17
 
 	//////////////////////////////////////////////////////////////////////////
 
-#if 0
 	template <typename Iterator, typename Skipper>
 	struct json_reader : qi::grammar<Iterator, object_t(), Skipper>
 	{
@@ -238,6 +249,6 @@ namespace json17
 			throw std::runtime_error(ss.str());
 		}
 	}
-#endif
+
 	//////////////////////////////////////////////////////////////////////////
 }
