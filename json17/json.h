@@ -4,126 +4,120 @@
 
 #include <boost/variant.hpp>
 #include <boost/algorithm/string.hpp>
+#include <boost/spirit/include/qi.hpp>
+
+#include <iomanip>
+#include <sstream>
 #include <initializer_list>
 #include <vector>
 #include <exception>
 
 namespace json17
 {
+	//////////////////////////////////////////////////////////////////////////
+
+	namespace qi = boost::spirit::qi;
 
 	//////////////////////////////////////////////////////////////////////////
 
 	struct object_t //<name> : <value>
 	{
-		struct value_t
+		struct array_t;
+		using value_type = boost::variant<
+			config::null_t,
+			config::boolean_t, config::numeric_t, config::unsigned_t, config::float_t, config::string_t,
+			boost::recursive_wrapper<object_t>,
+			boost::recursive_wrapper<array_t>>;
+
+		struct array_t
 		{
-			using value_types = boost::variant<
-				config::null_t,
-				config::boolean_t, config::numeric_t, config::unsigned_t, config::float_t, config::string_t,
-				boost::recursive_wrapper<object_t>,
-				config::array_t<value_t>>;
+			using array_type = config::array_t<value_type>;
+			array_type _values;
+		
+			array_t() = default;
 
-			value_t()
-				: _value(config::null_t{})
+			template <typename T>
+			array_t(std::initializer_list<T> il)
+				: _values(std::begin(il), std::end(il))
 			{
 			}
 
-			template <typename U>
-			value_t(U val, typename std::enable_if<
-				std::is_same<object_t, U>::value or
-				std::is_same<config::null_t, U>::value or
-				std::is_same<config::boolean_t, U>::value or
-				std::is_same<config::numeric_t, U>::value or
-				std::is_same<config::unsigned_t, U>::value or
-				std::is_same<config::float_t, U>::value>::type* t = 0)
-				: _value(std::move(val))
+			array_t(std::initializer_list<value_type> il)
+				: _values(il)
 			{
 			}
 
-			template <typename U>
-			value_t(U&& val, typename std::enable_if<
-				not std::is_same<typename std::remove_reference<U>::type, value_t>::value
-				and std::is_convertible<U, config::string_t>::value>::type* = 0)
-				: _value(config::string_t(std::forward<U>(val)))
+			template <typename T>
+			value_type& operator[](T&& key)
 			{
+				return _values.at(std::forward<T>(key));
 			}
 
-			value_t(std::initializer_list<value_t> il)
-				: value_t(std::begin(il), std::end(il))
+			template <typename T>
+			const value_type& operator[](T&& key) const
 			{
+				return _values.at(std::forward<T>(key));
 			}
 
-			template <typename Iterator>
-			value_t(Iterator b, Iterator e)
-				: _value(config::array_t<value_t>(b, e))
+			bool operator==(const array_t& other) const
 			{
+				return _values == other._values;
 			}
 
-			bool operator==(const value_t& other) const
-			{
-				return _value == other._value;
-			}
-
-			bool operator!=(const value_t& other) const
-			{
-				return !(*this == other);
-			}
-
-			template <typename R>
-			operator R() const 
-			{
-				return get_value<R>();
-			}
-
-			template <typename R>
-			R get_value(R def = R{}) const
-			{
-				try
-				{
-					return boost::get<R>(_value);
-				}
-				catch (std::exception & )
-				{
-					return def;
-				}
-			}
-
-		private:
-			value_types _value;
+			// friends
+			friend decltype(auto) begin(const array_t& arr) { return std::begin(arr._values); }
+			friend decltype(auto) end(const array_t& arr) {	return std::end(arr._values);	}
+			friend decltype(auto) begin(array_t& arr) { return std::begin(arr._values); }
+			friend decltype(auto) end(array_t& arr) { return std::end(arr._values); }
 		};
 
-		using holder_t = config::map_t<config::string_t, value_t>;
+		using holder_type = config::map_t<config::string_t, value_type>;
 
 		object_t() = default;
 
-		// "foo" : true
+		// { "foo" : true }
 		template <typename U>
-		object_t(config::string_t path, U&& value)
+		object_t(config::string_t path, U&& val,
+				 typename std::enable_if<
+				 std::is_same<object_t, U>::value or
+				 std::is_same<config::null_t, U>::value or
+				 std::is_same<config::boolean_t, U>::value or
+				 std::is_same<config::numeric_t, U>::value or
+				 std::is_same<config::unsigned_t, U>::value or
+				 std::is_same<config::float_t, U>::value>::type* = 0)
 		{
-			add(path, value_t(std::forward<U>(value)));
+			add(path, value_type(std::forward<U>(val)));
 		}
 
-		// "foo" : [1, 2, 3]
+		// { "foo" : "some_string" }
+		template <typename U>
+		object_t(config::string_t path, U&& val, 
+				 typename std::enable_if<
+				 std::is_constructible<config::string_t, U>::value>::type* = 0)
+		{
+			add(path, value_type(config::string_t(std::forward<U>(val))));
+		}
+		// {  "foo" : [1, 2, 3] }
 		template <typename T>
 		object_t(config::string_t path, std::initializer_list<T> il)
 		{
-			add(path, value_t(std::begin(il), std::end(il)));
+			add(path, value_type(array_t(il)));
 		}
 
-		// "foo" : { "bar" : 10 }
+		// { "foo" : { "bar" : 10 } }
 		object_t(config::string_t path, object_t obj)
 		{
-			add(path, value_t(std::move(obj)));
+			add(path, value_type(obj));
 		}
 
 		// { {"foo" : true}, {"bar" : 4} }
- 		object_t(std::initializer_list<object_t> il)
- 		{
- 			std::for_each(std::begin(il), std::end(il), [this](const auto& v) 
+		object_t(std::initializer_list<object_t> il)
+		{
+			std::for_each(std::begin(il), std::end(il), [this](const auto& v)
 			{
 				_pairs.insert(std::begin(v._pairs), std::end(v._pairs));
 			});
- 		}
+		}
 
 		bool operator==(const object_t& other) const
 		{
@@ -135,45 +129,52 @@ namespace json17
 			return !(*this == other);
 		}
 
-		void add(config::string_t key, value_t val)
+		void add(config::string_t key, value_type val)
 		{
 			_pairs.emplace(key, val);
 		}
 
-		value_t operator[](const config::string_t& path) const
+		value_type operator[](const config::string_t& path) const
 		{
 			return get(path);
 		}
 
-		value_t get(const config::string_t& path) const
+		value_type get(const config::string_t& path) const
 		{
 			const auto path_it = _pairs.find(path);
 			if (path_it == _pairs.end())
 			{
-				return value_t{};
+				return value_type{};
 			}
 			return path_it->second;
 		}
 
-		template <typename R>
+		template <typename R = object_t>
 		R get_value(const config::string_t& path, R def = R{}) const
 		{
-			std::vector<config::string_t> v_path;
-			boost::split(v_path, path, boost::is_any_of(config::string_t(".")));
-			if (v_path.size() == 1)
+			try
 			{
-				return get(path).get_value<R>(def);
+				std::vector<config::string_t> v_path;
+				boost::split(v_path, path, boost::is_any_of(config::string_t(".")));
+				if (v_path.size() == 1)
+				{
+					return boost::get<R>(get(path));
+				}
+				else
+				{
+					auto val = get(*std::begin(v_path));
+					v_path.erase(std::begin(v_path));
+					return boost::get<object_t>(val).get_value<R>(boost::join(v_path, config::string_t(".")), def);
+				}
 			}
-			else
+			catch (std::exception&)
 			{
-				auto val = get(*std::begin(v_path));
-				v_path.erase(std::begin(v_path));
-				return val.get_value<object_t>().get_value<R>(boost::join(v_path, config::string_t(".")), def);
+				return def;
 			}
 		}
 
 	private:
-		holder_t _pairs;
+		holder_type _pairs;
 	};
 
 	//////////////////////////////////////////////////////////////////////////
@@ -184,7 +185,7 @@ namespace json17
 	using unsigned_t = config::unsigned_t;
 	using float_t = config::float_t;
 	using string_t = config::string_t;
-	using array_t = config::array_t<object_t::value_t>;
+	using array_t = object_t::array_t;
 
 	//////////////////////////////////////////////////////////////////////////
 
@@ -197,5 +198,46 @@ namespace json17
 		// 		}
 	};
 
+	//////////////////////////////////////////////////////////////////////////
+
+#if 0
+	template <typename Iterator, typename Skipper>
+	struct json_reader : qi::grammar<Iterator, object_t(), Skipper>
+	{
+		json_reader() : json_reader::base_type(_object)
+		{
+			//_array = qi::lit('[') >> -(_value % ',') >> qi::lit(']');
+			_value = qi::bool_ | qi::int_ | qi::uint_ | qi::double_ | *qi::char_("a-zA-Z0-9");// | _object | _array;
+			_key_value = qi::lit("\"") >> *qi::char_("a-zA-Z0-9") >> qi::lit("\"") >> qi::lit(":") >> _value;
+			_object = qi::lit("{") >> -(_key_value % ",") >> qi::lit("}");
+
+			BOOST_SPIRIT_DEBUG_NODE(_value);
+			BOOST_SPIRIT_DEBUG_NODE(_key_value);
+		}
+
+	private:
+		//qi::rule<Iterator, array_t(), Skipper> _array;
+		qi::rule<Iterator, object_t::value_t(), Skipper> _value;
+		qi::rule<Iterator, object_t(), Skipper> _key_value, _object;
+	};
+
+	object_t from_string(const std::string& input)
+	{
+		json_reader<std::string::const_iterator, qi::ascii::space_type> g{};
+		auto f = input.begin(), l = input.end();
+		object_t obj;
+		bool ok = qi::phrase_parse(f, l, g, qi::ascii::space, obj);
+		if (ok)
+		{
+			return obj;
+		}
+		else
+		{
+			std::stringstream ss;
+			ss << "failed to parse, remaining : [" << std::quoted(std::string{ f, l }) << "]";
+			throw std::runtime_error(ss.str());
+		}
+	}
+#endif
 	//////////////////////////////////////////////////////////////////////////
 }
