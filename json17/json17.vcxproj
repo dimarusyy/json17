@@ -21,8 +21,6 @@
   <ItemGroup>
     <ClInclude Include="config.h" />
     <ClInclude Include="json.h" />
-    <ClInclude Include="reader.h" />
-    <ClInclude Include="writer.h" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>15.0</VCProjectVersion>

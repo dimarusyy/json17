@@ -2,9 +2,14 @@
 
 #include "config.h"
 
+#ifdef _DEBUG
+#define BOOST_SPIRIT_X3_DEBUG
+#endif
+
 #include <boost/variant.hpp>
 #include <boost/algorithm/string.hpp>
-#include <boost/spirit/include/qi.hpp>
+#include <boost/spirit/home/x3.hpp>
+#include <boost/spirit/include/phoenix.hpp>
 
 #include <iomanip>
 #include <sstream>
@@ -14,10 +19,6 @@
 
 namespace json17
 {
-	//////////////////////////////////////////////////////////////////////////
-
-	namespace qi = boost::spirit::qi;
-
 	//////////////////////////////////////////////////////////////////////////
 
 	struct object_t //<name> : <value>
@@ -48,7 +49,7 @@ namespace json17
 			{
 			}
 
-			array_t(std::initializer_list<value_type> il)
+			array_t(std::initializer_list<object_t::value_type> il)
 				: _values(il)
 			{
 			}
@@ -82,23 +83,20 @@ namespace json17
 		object_t() = default;
 
 		// { "foo" : true }
-		template <typename U>
-		object_t(config::string_t path, U&& val,
-				 typename std::enable_if<
-				 std::is_same<config::null_t, U>::value or
-				 std::is_same<config::boolean_t, U>::value or
-				 std::is_same<config::numeric_t, U>::value or
-				 std::is_same<config::unsigned_t, U>::value or
-				 std::is_same<config::float_t, U>::value>::type* = 0)
+		template <typename U, typename std::enable_if<
+			std::is_same<config::null_t, U>::value or
+			std::is_same<config::boolean_t, U>::value or
+			std::is_same<config::numeric_t, U>::value or
+			std::is_same<config::unsigned_t, U>::value or
+			std::is_same<config::float_t, U>::value>::type* = 0>
+		object_t(config::string_t path, U&& val)
 		{
 			add(path, value_type(std::forward<U>(val)));
 		}
 
 		// { "foo" : "some_string" }
-		template <typename U>
-		object_t(config::string_t path, U&& val, 
-				 typename std::enable_if<
-				 std::is_constructible<config::string_t, U>::value>::type* = 0)
+		template <typename U, typename std::enable_if<std::is_constructible<config::string_t, U>::value>::type* = 0>
+		object_t(config::string_t path, U&& val)
 		{
 			add(path, value_type(config::string_t(std::forward<U>(val))));
 		}
@@ -212,32 +210,54 @@ namespace json17
 
 	//////////////////////////////////////////////////////////////////////////
 
-	template <typename Iterator, typename Skipper>
-	struct json_reader : qi::grammar<Iterator, object_t(), Skipper>
+	namespace reader
 	{
-		json_reader() : json_reader::base_type(_object)
+		namespace x3 = boost::spirit::x3;
+		namespace phx = boost::phoenix;
+		namespace fusion = boost::fusion;
+
+		struct true_false_t : x3::symbols<boolean_t>
 		{
-			//_array = qi::lit('[') >> -(_value % ',') >> qi::lit(']');
-			_value = qi::bool_ | qi::int_ | qi::uint_ | qi::double_ | *qi::char_("a-zA-Z0-9");// | _object | _array;
-			_key_value = qi::lit("\"") >> *qi::char_("a-zA-Z0-9") >> qi::lit("\"") >> qi::lit(":") >> _value;
-			_object = qi::lit("{") >> -(_key_value % ",") >> qi::lit("}");
+			true_false_t()
+			{
+				add("true", true);
+				add("false", false);
+			}
+		};
 
-			BOOST_SPIRIT_DEBUG_NODE(_value);
-			BOOST_SPIRIT_DEBUG_NODE(_key_value);
-		}
+		static true_false_t r_boolean;
+		static x3::rule<struct value_, object_t::value_type> r_value{"value_t"};
+		static x3::rule<struct object_t_, object_t> r_object{"object_t"};
+		static x3::rule<struct array_t_, array_t> r_array{ "array_t" };
 
-	private:
-		//qi::rule<Iterator, array_t(), Skipper> _array;
-		qi::rule<Iterator, object_t::value_t(), Skipper> _value;
-		qi::rule<Iterator, object_t(), Skipper> _key_value, _object;
-	};
+		static auto r_string = x3::lexeme['"' >> *x3::char_ >> '"'];
+		static auto r_array_def = '[' >> -(r_value % ',') >> ']';
 
-	object_t from_string(const std::string& input)
+		static auto r_numeric = x3::int_parser<numeric_t>{};
+		static auto r_unsigned = x3::uint_parser<unsigned_t>{};
+		static auto r_float = x3::real_parser<float_t>{};
+		static auto r_number = x3::lexeme[r_numeric | r_unsigned >> !x3::char_(".e0-9")] | r_float;
+
+		static auto r_value_def = r_boolean | r_number | r_string;// r_boolean | r_number | r_string | r_array | r_object;
+
+		static auto create_object = [](auto &ctx)
+		{
+			auto attr = x3::_attr(ctx);
+			phx::bind(&object_t::add, x3::_val(ctx), fusion::at_c<0>(attr), fusion::at_c<1>(attr));
+		};
+		static auto r_object_def = ('{' >> r_string >> ':' >> r_value >> '}')[create_object];
+
+		BOOST_SPIRIT_DEFINE(r_value, r_object, r_array);
+	}
+
+
+	inline object_t from_string(const std::string& input)
 	{
-		json_reader<std::string::const_iterator, qi::ascii::space_type> g{};
+		namespace x3 = boost::spirit::x3;
+
 		auto f = input.begin(), l = input.end();
 		object_t obj;
-		bool ok = qi::phrase_parse(f, l, g, qi::ascii::space, obj);
+		bool ok = x3::phrase_parse(f, l, reader::r_object, x3::space, obj);
 		if (ok)
 		{
 			return obj;
