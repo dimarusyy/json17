@@ -10,6 +10,7 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/spirit/home/x3.hpp>
 #include <boost/spirit/include/phoenix.hpp>
+#include <boost/phoenix/bind/bind_member_function.hpp>
 
 #include <iomanip>
 #include <sstream>
@@ -32,14 +33,14 @@ namespace json17
 
 		struct array_t
 		{
-			using array_type = config::array_t<value_type>;
-			array_type _values;
-		
+			using value_type = config::array_t<value_type>;
+			value_type _values;
+
 			array_t() = default;
 
 			template <typename...Args>
 			array_t(Args...args)
-				: _values(std::initializer_list<value_type>{value_type(args)...})
+				: _values(std::initializer_list<object_t::value_type>{object_t::value_type(args)...})
 			{
 			}
 
@@ -55,13 +56,13 @@ namespace json17
 			}
 
 			template <typename T>
-			value_type& operator[](T&& key)
+			object_t::value_type& operator[](T&& key)
 			{
 				return _values.at(std::forward<T>(key));
 			}
 
 			template <typename T>
-			const value_type& operator[](T&& key) const
+			const object_t::value_type& operator[](T&& key) const
 			{
 				return _values.at(std::forward<T>(key));
 			}
@@ -73,7 +74,7 @@ namespace json17
 
 			// friends
 			friend decltype(auto) begin(const array_t& arr) { return std::begin(arr._values); }
-			friend decltype(auto) end(const array_t& arr) {	return std::end(arr._values);	}
+			friend decltype(auto) end(const array_t& arr) { return std::end(arr._values); }
 			friend decltype(auto) begin(array_t& arr) { return std::begin(arr._values); }
 			friend decltype(auto) end(array_t& arr) { return std::end(arr._values); }
 		};
@@ -89,7 +90,7 @@ namespace json17
 			std::is_same<config::numeric_t, U>::value or
 			std::is_same<config::unsigned_t, U>::value or
 			std::is_same<config::float_t, U>::value>::type* = 0>
-		object_t(config::string_t path, U&& val)
+			object_t(config::string_t path, U&& val)
 		{
 			add(path, value_type(std::forward<U>(val)));
 		}
@@ -102,10 +103,10 @@ namespace json17
 		}
 
 		// {  "foo" : [1, 2, 3] }
-		template <typename T>
-		object_t(config::string_t path, std::initializer_list<T> il)
+		template <typename...Args>
+		object_t(config::string_t path, Args...args)
 		{
-			add(path, value_type(array_t(il)));
+			add(path, value_type(array_t(args...)));
 		}
 
 		// { "foo" : { "bar" : 10 } }
@@ -118,9 +119,9 @@ namespace json17
 		object_t(std::initializer_list<object_t> il)
 		{
 			std::for_each(std::begin(il), std::end(il), [this](const auto& v)
-			{
-				_pairs.insert(std::begin(v._pairs), std::end(v._pairs));
-			});
+						  {
+							  _pairs.insert(std::begin(v._pairs), std::end(v._pairs));
+						  });
 		}
 
 		bool operator==(const object_t& other) const
@@ -212,25 +213,74 @@ namespace json17
 
 	namespace reader
 	{
+		//////////////////////////////////////////////////////////////////////////
+
 		namespace x3 = boost::spirit::x3;
 		namespace phx = boost::phoenix;
 		namespace fusion = boost::fusion;
 
-		struct true_false_t : x3::symbols<boolean_t>
+		namespace details
 		{
-			true_false_t()
+			//////////////////////////////////////////////////////////////////////////
+
+			struct true_false_t : x3::symbols<boolean_t>
 			{
-				add("true", true);
-				add("false", false);
-			}
-		};
+				true_false_t()
+				{
+					add("true", true);
+					add("false", false);
+				}
+			};
 
-		static true_false_t r_boolean;
-		static x3::rule<struct value_, object_t::value_type> r_value{"value_t"};
-		static x3::rule<struct object_t_, object_t> r_object{"object_t"};
+			static auto add_utf8_sym = [](auto& ctx)
+			{
+				using back_inserter_t = std::back_insert_iterator<config::string_t>;
+				back_inserter_t out_iter(_val(ctx));
+				boost::utf8_output_iterator<back_inserter_t> utf8_iter(out_iter);
+				*utf8_iter++ = _attr(ctx);
+			};
+
+			static auto add_esc_sym = [](auto& ctx)
+			{
+				auto& val_ref = _val(ctx);
+				switch (_attr(ctx))
+				{
+				case '"': val_ref += '"';		   break;
+				case '\\': val_ref += '\\';        break;
+				case '/': val_ref += '/';          break;
+				case 'b': val_ref += '\b';         break;
+				case 'f': val_ref += '\f';         break;
+				case 'n': val_ref += '\n';         break;
+				case 'r': val_ref += '\r';         break;
+				case 't': val_ref += '\t';         break;
+				}
+			};
+
+			using uchar = boost::uint32_t;
+			static auto char_esc =
+				'\\' >> 
+				('u' >> x3::uint_parser<uchar, 16, 4, 4>{})[add_utf8_sym] | x3::char_("\"\\/bfnrt")[add_esc_sym];
+
+			static auto append = [](auto& ctx) 
+			{ 
+				x3::_val(ctx) += x3::_attr(ctx); 
+			};
+			static auto char_special = x3::char_("\x20\x21\x23-\x5b\x5d-\x7e")[details::append];
+
+			//////////////////////////////////////////////////////////////////////////
+		}
+
+		struct object_t_tag {};
+
+		static details::true_false_t r_boolean;
+
+		static x3::rule<struct value_, object_t::value_type> r_value{ "value_t" };
+		static x3::rule<struct object_t_> r_object{ "object_t" };
+
+		static x3::rule<struct string_t_, config::string_t> r_string{ "string_t" };
+		static auto r_string_def = x3::lexeme['"' >> *(details::char_esc | details::char_special) >> '"'];
+		
 		static x3::rule<struct array_t_, array_t> r_array{ "array_t" };
-
-		static auto r_string = x3::lexeme['"' >> *x3::char_ >> '"'];
 		static auto r_array_def = '[' >> -(r_value % ',') >> ']';
 
 		static auto r_numeric = x3::int_parser<numeric_t>{};
@@ -238,16 +288,19 @@ namespace json17
 		static auto r_float = x3::real_parser<float_t>{};
 		static auto r_number = x3::lexeme[r_numeric | r_unsigned >> !x3::char_(".e0-9")] | r_float;
 
-		static auto r_value_def = r_boolean | r_number | r_string;// r_boolean | r_number | r_string | r_array | r_object;
+		static auto r_value_def =  r_string; //r_boolean | r_number
 
 		static auto create_object = [](auto &ctx)
 		{
+			auto obj = x3::get<object_t_tag>(ctx);
 			auto attr = x3::_attr(ctx);
-			phx::bind(&object_t::add, x3::_val(ctx), fusion::at_c<0>(attr), fusion::at_c<1>(attr));
+			obj.get().add(fusion::at_c<0>(attr), fusion::at_c<1>(attr));
 		};
-		static auto r_object_def = ('{' >> r_string >> ':' >> r_value >> '}')[create_object];
+		static auto r_object_def = (r_string >> x3::lit(':') >> r_value)[create_object];
 
-		BOOST_SPIRIT_DEFINE(r_value, r_object, r_array);
+		BOOST_SPIRIT_DEFINE(r_value, r_array, r_string, r_object);
+		
+		//////////////////////////////////////////////////////////////////////////
 	}
 
 
@@ -257,7 +310,9 @@ namespace json17
 
 		auto f = input.begin(), l = input.end();
 		object_t obj;
-		bool ok = x3::phrase_parse(f, l, reader::r_object, x3::space, obj);
+		const auto parser = x3::with<reader::object_t_tag>(std::ref(obj))
+			[x3::lit('{') >> -(reader::r_object % ',' >> x3::lit('}'))];
+		const bool ok = x3::phrase_parse(f, l, parser, x3::space);
 		if (ok)
 		{
 			return obj;

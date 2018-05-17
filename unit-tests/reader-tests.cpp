@@ -7,7 +7,7 @@ BOOST_AUTO_TEST_SUITE(reader_tests)
 
 BOOST_AUTO_TEST_CASE(reader_test_1)
 {
- 	const std::string str = R"({ "foo" : 4 })";
+ 	const std::string str = R"({ "string" : \"some_string\"})";
  	auto obj = json17::from_string(str);
 }
 
