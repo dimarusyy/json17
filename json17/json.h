@@ -21,7 +21,7 @@
 namespace json17
 {
 	//////////////////////////////////////////////////////////////////////////
-
+	
 	struct object_t //<name> : <value>
 	{
 		struct array_t;
@@ -31,52 +31,26 @@ namespace json17
 			boost::recursive_wrapper<object_t>,
 			boost::recursive_wrapper<array_t>>;
 
-		struct array_t
+		struct array_t : config::array_t<object_t::value_type>
 		{
-			using value_type = config::array_t<value_type>;
-			value_type _values;
-
-			array_t() = default;
+			using base_t = config::array_t<value_type>;
 
 			template <typename...Args>
 			array_t(Args...args)
-				: _values(std::initializer_list<object_t::value_type>{object_t::value_type(args)...})
+				: base_t(std::initializer_list<object_t::value_type>{object_t::value_type(args)...})
 			{
 			}
 
 			template <typename T>
 			array_t(std::initializer_list<T> il)
-				: _values(std::begin(il), std::end(il))
+				: base_t(std::begin(il), std::end(il))
 			{
 			}
 
 			array_t(std::initializer_list<object_t::value_type> il)
-				: _values(il)
+				: base_t(il)
 			{
 			}
-
-			template <typename T>
-			object_t::value_type& operator[](T&& key)
-			{
-				return _values.at(std::forward<T>(key));
-			}
-
-			template <typename T>
-			const object_t::value_type& operator[](T&& key) const
-			{
-				return _values.at(std::forward<T>(key));
-			}
-
-			bool operator==(const array_t& other) const
-			{
-				return _values == other._values;
-			}
-
-			// friends
-			friend decltype(auto) begin(const array_t& arr) { return std::begin(arr._values); }
-			friend decltype(auto) end(const array_t& arr) { return std::end(arr._values); }
-			friend decltype(auto) begin(array_t& arr) { return std::begin(arr._values); }
-			friend decltype(auto) end(array_t& arr) { return std::end(arr._values); }
 		};
 
 		using holder_type = config::map_t<config::string_t, value_type>;
@@ -198,16 +172,7 @@ namespace json17
 	using string_t = config::string_t;
 	using array_t = object_t::array_t;
 
-	//////////////////////////////////////////////////////////////////////////
-
-	struct json
-	{
-
-		// 		json(std::initializer_list<T> il)
-		// 		{
-		// 
-		// 		}
-	};
+	using json = object_t;
 
 	//////////////////////////////////////////////////////////////////////////
 
@@ -257,7 +222,7 @@ namespace json17
 																	   x3::_val(ctx) += x3::_attr(ctx);
 																   })];
 			static auto escaped_string =
-				x3::lit("\x5C") >>                    // \ (reverse solidus)
+				x3::lit("\x5C") >>                         // \ (reverse solidus)
 				(
 					x3::lit("\x22")[add_utf8_sym_ex('"')]  // "    quotation mark  U+0022
 					|
@@ -285,21 +250,22 @@ namespace json17
 
 		static details::true_false_t r_boolean;
 
-		static x3::rule<struct value_, object_t::value_type> r_value{ "value_t" };
-		static x3::rule<struct object_t_> r_object{ "object_t" };
+		static auto r_value = x3::rule<struct value_, object_t::value_type>{ "value_t" };
+		static auto r_object = x3::rule<struct object_t_>{ "object_t" };
 
-		static x3::rule<struct string_t_, config::string_t> r_string{ "string_t" };
+		static auto r_string = x3::rule<struct string_t_, config::string_t>{ "string_t" };
 		static auto r_string_def = x3::lexeme['"' >> *(details::non_escaped_string | details::escaped_string) >> '"'];
 
-		static x3::rule<struct array_t_, array_t> r_array{ "array_t" };
+		static auto r_array = x3::rule<struct array_t_, array_t>{ "array_t" };
 		static auto r_array_def = '[' >> -(r_value % ',') >> ']';
 
 		static auto r_numeric = x3::int_parser<numeric_t>{};
 		static auto r_unsigned = x3::uint_parser<unsigned_t>{};
 		static auto r_float = x3::real_parser<float_t>{};
-		static auto r_number = x3::lexeme[r_numeric | r_unsigned >> !x3::char_(".e0-9")] | r_float;
+		
+		static auto r_number = x3::lexeme[r_numeric | r_unsigned >> !x3::char_(".eE")] | r_float;
 
-		static auto r_value_def = r_string | r_boolean | r_number;
+		static auto r_value_def = r_boolean | r_number | r_string | r_array | r_object;
 
 		static auto create_object = [](auto &ctx)
 		{
@@ -324,7 +290,7 @@ namespace json17
 		const auto parser = x3::with<reader::object_t_tag>(std::ref(obj))
 			[x3::lit('{') >> -(reader::r_object % ',' >> x3::lit('}'))];
 		const bool ok = x3::phrase_parse(f, l, parser, x3::space);
-		if (ok)
+		if (ok && f == l)
 		{
 			return obj;
 		}
