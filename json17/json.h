@@ -232,40 +232,51 @@ namespace json17
 				}
 			};
 
+			struct add_utf8_sym_ex
+			{
+				add_utf8_sym_ex(char s) : _s(s) {}
+				template <typename CTX>
+				void operator()(const CTX& ctx) const 
+				{ 
+					x3::_val(ctx) += _s; 
+				}
+				char _s;
+			};
+
 			static auto add_utf8_sym = [](auto& ctx)
 			{
 				using back_inserter_t = std::back_insert_iterator<config::string_t>;
-				back_inserter_t out_iter(_val(ctx));
+				back_inserter_t out_iter(x3::_val(ctx));
 				boost::utf8_output_iterator<back_inserter_t> utf8_iter(out_iter);
-				*utf8_iter++ = _attr(ctx);
+				*utf8_iter++ = x3::_attr(ctx);
 			};
 
-			static auto add_esc_sym = [](auto& ctx)
-			{
-				auto& val_ref = _val(ctx);
-				switch (_attr(ctx))
-				{
-				case '"': val_ref += '"';		   break;
-				case '\\': val_ref += '\\';        break;
-				case '/': val_ref += '/';          break;
-				case 'b': val_ref += '\b';         break;
-				case 'f': val_ref += '\f';         break;
-				case 'n': val_ref += '\n';         break;
-				case 'r': val_ref += '\r';         break;
-				case 't': val_ref += '\t';         break;
-				}
-			};
-
-			using uchar = boost::uint32_t;
-			static auto char_esc =
-				'\\' >> 
-				('u' >> x3::uint_parser<uchar, 16, 4, 4>{})[add_utf8_sym] | x3::char_("\"\\/bfnrt")[add_esc_sym];
-
-			static auto append = [](auto& ctx) 
-			{ 
-				x3::_val(ctx) += x3::_attr(ctx); 
-			};
-			static auto char_special = x3::char_("\x20\x21\x23-\x5b\x5d-\x7e")[details::append];
+			static auto _4hex = x3::uint_parser<uint32_t, 16, 4, 4>{}[add_utf8_sym];
+			static auto non_escaped_string = (~x3::char_("\"\\"))[([](auto &ctx)
+																   {
+																	   x3::_val(ctx) += x3::_attr(ctx);
+																   })];
+			static auto escaped_string =
+				x3::lit("\x5C") >>                    // \ (reverse solidus)
+				(
+					x3::lit("\x22")[add_utf8_sym_ex('"')]  // "    quotation mark  U+0022
+					|
+					x3::lit("\x5C")[add_utf8_sym_ex('\\')] // \    reverse solidus U+005C
+					|
+					x3::lit("\x2F")[add_utf8_sym_ex('/')]  // /    solidus         U+002F
+					|
+					x3::lit("\x62")[add_utf8_sym_ex('\b')]  // b    backspace       U+0008
+					|
+					x3::lit("\x66")[add_utf8_sym_ex('\f')]  // f    form feed       U+000C
+					|
+					x3::lit("\x6E")[add_utf8_sym_ex('\n')]  // n    line feed       U+000A
+					|
+					x3::lit("\x72")[add_utf8_sym_ex('\r')]  // r    carriage return U+000D
+					|
+					x3::lit("\x74")[add_utf8_sym_ex('\t')]  // t    tab             U+0009
+					|
+					x3::lit("\x75") >> _4hex           // uXXXX                U+XXXX
+				);
 
 			//////////////////////////////////////////////////////////////////////////
 		}
@@ -278,8 +289,8 @@ namespace json17
 		static x3::rule<struct object_t_> r_object{ "object_t" };
 
 		static x3::rule<struct string_t_, config::string_t> r_string{ "string_t" };
-		static auto r_string_def = x3::lexeme['"' >> *(details::char_esc | details::char_special) >> '"'];
-		
+		static auto r_string_def = x3::lexeme['"' >> *(details::non_escaped_string | details::escaped_string) >> '"'];
+
 		static x3::rule<struct array_t_, array_t> r_array{ "array_t" };
 		static auto r_array_def = '[' >> -(r_value % ',') >> ']';
 
@@ -288,7 +299,7 @@ namespace json17
 		static auto r_float = x3::real_parser<float_t>{};
 		static auto r_number = x3::lexeme[r_numeric | r_unsigned >> !x3::char_(".e0-9")] | r_float;
 
-		static auto r_value_def =  r_string; //r_boolean | r_number
+		static auto r_value_def = r_string | r_boolean | r_number;
 
 		static auto create_object = [](auto &ctx)
 		{
@@ -299,7 +310,7 @@ namespace json17
 		static auto r_object_def = (r_string >> x3::lit(':') >> r_value)[create_object];
 
 		BOOST_SPIRIT_DEFINE(r_value, r_array, r_string, r_object);
-		
+
 		//////////////////////////////////////////////////////////////////////////
 	}
 
