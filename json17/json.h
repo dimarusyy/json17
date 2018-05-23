@@ -259,11 +259,21 @@ namespace json17
 		static auto r_array = x3::rule<struct array_t_, array_t>{ "array_t" };
 		static auto r_array_def = '[' >> -(r_value % ',') >> ']';
 
-		static auto r_numeric = x3::int_parser<numeric_t>{};
-		static auto r_unsigned = x3::uint_parser<unsigned_t>{};
-		static auto r_float = x3::real_parser<float_t>{};
+		static auto r_numeric = x3::rule<struct numeric_t_, config::numeric_t>{ "numeric_t" };
+		static auto r_numeric_def = x3::int_parser<numeric_t>{};
+
+		static auto r_unsigned = x3::rule<struct unsigned_t_, config::unsigned_t>{ "unsigned_t" };
+		static auto r_unsigned_def = x3::uint_parser<unsigned_t>{};
+
+		static auto r_float = x3::rule<struct float_, config::float_t>{ "float_t" };
+		static auto r_float_def = x3::real_parser<float_t>{};
 		
-		static auto r_number = x3::lexeme[r_numeric | r_unsigned >> !x3::char_(".eE")] | r_float;
+		static auto r_number = 
+			x3::lexeme[r_numeric >> !x3::char_(".eE")] 
+			| 
+			x3::lexeme[r_unsigned >> !x3::char_(".eE")]
+			|
+			r_float;
 
 		static auto r_value_def = r_boolean | r_number | r_string | r_array | r_object;
 
@@ -275,7 +285,7 @@ namespace json17
 		};
 		static auto r_object_def = (r_string >> x3::lit(':') >> r_value)[create_object];
 
-		BOOST_SPIRIT_DEFINE(r_value, r_array, r_string, r_object);
+		BOOST_SPIRIT_DEFINE(r_numeric, r_unsigned, r_float, r_value, r_array, r_string, r_object);
 
 		//////////////////////////////////////////////////////////////////////////
 	}
