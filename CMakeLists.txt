@@ -69,6 +69,16 @@ endif ()
 # Dependencies
 ##################################################
 include(dependencies)
+include(flags)
 
+##################################################
+# Flags
+##################################################
+configure_msvc_runtime()
+print_compile_flags()
+
+##################################################
+# Subdirectories
+##################################################
+add_subdirectory(json17)
 add_subdirectory(unit-tests)
-

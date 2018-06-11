@@ -11,6 +11,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "cmake", "cmake", "{E797A2B4
 	ProjectSection(SolutionItems) = preProject
 		cmake\constexpr_if.cpp = cmake\constexpr_if.cpp
 		cmake\dependencies.cmake = cmake\dependencies.cmake
+		cmake\flags.cmake = cmake\flags.cmake
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{4E6A806C-CE4D-459E-BA3F-32FBBC5A73D7}"

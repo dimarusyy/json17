@@ -63,10 +63,10 @@ namespace json17
 
 		// { "foo" : true }
 		template <typename U, typename std::enable_if<
-			std::is_same<config::null_t, U>::value or
-			std::is_same<config::boolean_t, U>::value or
-			std::is_same<config::numeric_t, U>::value or
-			std::is_same<config::unsigned_t, U>::value or
+			std::is_same<config::null_t, U>::value ||
+			std::is_same<config::boolean_t, U>::value ||
+			std::is_same<config::numeric_t, U>::value ||
+			std::is_same<config::unsigned_t, U>::value ||
 			std::is_same<config::float_t, U>::value>::type* = 0>
 			object_t(config::string_t path, U&& val)
 		{

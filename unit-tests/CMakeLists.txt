@@ -1,7 +1,11 @@
 project(unit-tests)
-add_executable(unit-tests object-tests.cpp reader-tests.cpp)
+enable_testing()
 
-target_link_libraries(boost)
+# sources
+set(SOURCES stdafx.h stdafx.cpp object-tests.cpp reader-tests.cpp)
+
+add_executable(unit-tests ${SOURCES})
+target_link_libraries(unit-tests ${Boost_UNIT_TEST_FRAMEWORK_LIBRARY})
 if (clang_on_linux)
     target_link_libraries(unit_tests c++)
 endif ()
