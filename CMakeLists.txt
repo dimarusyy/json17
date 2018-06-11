@@ -37,13 +37,15 @@ function(try_std_flag std_flag)
     endif ()
 endfunction ()
 
-try_std_flag(-std=c++17)
-if (NOT std_flag)
-    try_std_flag(-std=c++1z) 
-elseif (NOT std_flag)
-    try_std_flag(-std=c++14)
-elseif (NOT std_flag)
-    message(FATAL_ERROR "Only Clang or GCC with -std=c++14 or later will work")
+if (NOT MSVC)
+	try_std_flag(-std=c++17)
+	if (NOT std_flag)
+		try_std_flag(-std=c++1z) 
+	elseif (NOT std_flag)
+		try_std_flag(-std=c++14)
+	elseif (NOT std_flag)
+		message(FATAL_ERROR "Only Clang or GCC with -std=c++14 or later will work")
+	endif ()
 endif ()
 
 ##################################################
@@ -58,7 +60,9 @@ if (CMAKE_CXX_COMPILER_ID STREQUAL Clang)
 elseif (CMAKE_CXX_COMPILER_ID STREQUAL GNU)
     add_definitions(${std_flag} -g -Wall)
 else ()
-    message(FATAL_ERROR "Only Clang or GCC with -std=c++14 or later will work")
+	if (NOT MSVC)
+		message(FATAL_ERROR "Only Clang or GCC with -std=c++14 or later will work")
+	endif()
 endif ()
 
 ##################################################
@@ -67,3 +71,4 @@ endif ()
 include(dependencies)
 
 add_subdirectory(unit-tests)
+
