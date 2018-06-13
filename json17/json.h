@@ -29,7 +29,7 @@ namespace json17
 		struct array_t;
 		using value_t = boost::variant<
 			config::null_t,
-			config::boolean_t, config::numeric_t, config::unsigned_t, config::float_t, config::string_t,
+			config::boolean_t, config::integer_t, config::unsigned_t, config::float_t, config::string_t,
 			boost::recursive_wrapper<object_t>,
 			boost::recursive_wrapper<array_t>>;
 
@@ -65,7 +65,7 @@ namespace json17
 		template <typename U, typename std::enable_if<
 			std::is_same<config::null_t, U>::value ||
 			std::is_same<config::boolean_t, U>::value ||
-			std::is_same<config::numeric_t, U>::value ||
+			std::is_same<config::integer_t, U>::value ||
 			std::is_same<config::unsigned_t, U>::value ||
 			std::is_same<config::float_t, U>::value>::type* = 0>
 			object_t(config::string_t path, U&& val)
@@ -175,7 +175,7 @@ namespace json17
 
 	using null_t = config::null_t;
 	using boolean_t = config::boolean_t;
-	using numeric_t = config::numeric_t;
+	using numeric_t = config::integer_t;
 	using unsigned_t = config::unsigned_t;
 	using float_t = config::float_t;
 	using string_t = config::string_t;
@@ -277,7 +277,7 @@ namespace json17
 			static auto r_array = x3::rule<struct array_t_, array_t>{ "array_t" };
 			static auto r_array_def = '[' >> -(r_value % ',') >> ']';
 
-			static auto r_numeric = x3::rule<struct numeric_t_, config::numeric_t>{ "numeric_t" };
+			static auto r_numeric = x3::rule<struct numeric_t_, config::integer_t>{ "numeric_t" };
 			static auto r_numeric_def = x3::int_parser<numeric_t>{};
 
 			static auto r_unsigned = x3::rule<struct unsigned_t_, config::unsigned_t>{ "unsigned_t" };
@@ -286,7 +286,7 @@ namespace json17
 			static auto r_float = x3::rule<struct float_, config::float_t>{ "float_t" };
 			static auto r_float_def = x3::real_parser<float_t>{};
 
-			static auto r_number = x3::lexeme[r_numeric >> !x3::char_(".eE")] |	x3::lexeme[r_unsigned >> !x3::char_(".eE")]	|r_float;
+			static auto r_number = x3::lexeme[r_unsigned >> !x3::char_(".eE")] | x3::lexeme[r_numeric >> !x3::char_(".eE")] |	r_float;
 
 			static auto r_value_def = r_boolean | r_number | r_string | r_array | r_object;
 
@@ -303,7 +303,6 @@ namespace json17
 
 		auto f = input.begin(), l = input.end();
 		object_t obj;
-//		const auto parser = x3::with<details::reader::object_t_tag>(std::ref(obj))[details::reader::r_object];
 		const auto ok = x3::parse(f, l, x3::skip(x3::space)[details::reader::r_object], obj);
 		if (ok)
 		{

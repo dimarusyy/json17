@@ -22,7 +22,7 @@ namespace json17
 
 		using null_t = boost::blank;
 		using boolean_t = bool;
-		using numeric_t = int32_t;
+		using integer_t = int32_t;
 		using unsigned_t = uint32_t;
 		using float_t = double;
 		using string_t = std::string;

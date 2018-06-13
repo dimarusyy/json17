@@ -1,0 +1,3 @@
+[submodule "benchmarks/nonius"]
+	path = benchmarks/nonius
+	url = https://github.com/libnonius/nonius.git
