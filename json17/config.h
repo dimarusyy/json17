@@ -24,14 +24,14 @@ namespace json17
 		using boolean_t = bool;
 		using integer_t = int32_t;
 		using unsigned_t = uint32_t;
-		using float_t = double;
+		using real_t = double;
 		using string_t = std::string;
 
 		template <typename T>
 		using array_t = std::vector<T>;
 
 		template <typename K, typename V>
-		using map_t = std::map<K, V>;
+		using holder_t = std::map<K, V>;
 
 		//////////////////////////////////////////////////////////////////////////
 	};

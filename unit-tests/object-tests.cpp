@@ -16,7 +16,7 @@ BOOST_AUTO_TEST_CASE(object_t_create_from_boolean)
 BOOST_AUTO_TEST_CASE(object_t_create_from_number)
 {
 	json17::object_t o1("numeric", 10);
-	BOOST_ASSERT_MSG(o1.get_value<json17::numeric_t>("numeric") == 10, "not found");
+	BOOST_ASSERT_MSG(o1.get_value<json17::integer_t>("numeric") == 10, "not found");
 }
 
 BOOST_AUTO_TEST_CASE(object_t_create_from_unsigned)
@@ -28,7 +28,7 @@ BOOST_AUTO_TEST_CASE(object_t_create_from_unsigned)
 BOOST_AUTO_TEST_CASE(object_t_create_from_float)
 {
 	json17::object_t o1("float", 12.0);
-	BOOST_ASSERT_MSG(o1.get_value<json17::float_t>("float") == 12.0, "not found");
+	BOOST_ASSERT_MSG(o1.get_value<json17::real_t>("float") == 12.0, "not found");
 }
 
 BOOST_AUTO_TEST_CASE(object_t_create_from_array)
@@ -78,7 +78,7 @@ BOOST_AUTO_TEST_CASE(object_t_create_complex_1)
 	json17::object_t o1({ "config", { { "log" , "some_path" }, { "level" , 4 }, { "enabled", true }, { "rotate", 1,2,3,4,5,6,true } } });
 
 	auto o1_log = o1.get_value<json17::string_t>("config.log");
-	auto o1_level = o1.get_value<json17::numeric_t>("config.level");
+	auto o1_level = o1.get_value<json17::integer_t>("config.level");
 	auto o1_enabled = o1.get_value<json17::boolean_t>("config.enabled");
 	auto o1_rotate = o1.get_value<json17::array_t>("config.rotate");
 
@@ -95,7 +95,7 @@ BOOST_AUTO_TEST_CASE(object_t_create_complex_2)
 	json17::object_t o1("config", { {"v1", {{ "log" , "some_path" }} }, { "v2", {{ "level" , 4 },{ "enabled", true }} } });
 	
 	auto o1_log = o1.get_value<json17::string_t>("config.v1.log"); 
-	auto o1_level = o1.get_value<json17::numeric_t>("config.v2.level");
+	auto o1_level = o1.get_value<json17::integer_t>("config.v2.level");
 	auto o1_enabled = o1.get_value<json17::boolean_t>("config.v2.enabled");
 
 	BOOST_ASSERT_MSG(o1_log == "some_path", "not found config.v1.log");
