@@ -16,7 +16,9 @@
 
 #include <boost/spirit/include/karma.hpp>
 #include <boost/spirit/include/qi.hpp>
+#include <boost/blank.hpp>
 
+#include <cstdint>
 #include <iomanip>
 #include <sstream>
 #include <initializer_list>
@@ -43,7 +45,7 @@ namespace json17
 
 		static auto add_utf8_sym = [](auto& ctx)
 		{
-			using back_inserter_t = std::back_insert_iterator<config::string_t>;
+			using back_inserter_t = std::back_insert_iterator<Config::string_t>;
 			back_inserter_t out_iter(x3::_val(ctx));
 			boost::utf8_output_iterator<back_inserter_t> utf8_iter(out_iter);
 			*utf8_iter++ = x3::_attr(ctx);
@@ -56,7 +58,7 @@ namespace json17
 			return oss.str();
 		}
 
-		static void append_utf8(config::string_t& to, uint32_t codepoint)
+		static void append_utf8(Config::string_t& to, uint32_t codepoint)
 		{
 			auto out = std::back_inserter(to);
 			boost::utf8_output_iterator<decltype(out)> convert(out);
@@ -75,21 +77,33 @@ namespace json17
 //////////////////////////////////////////////////////////////////////////
 namespace json17
 {
+	struct type_config
+	{
+		using null_t = boost::blank;
+		using boolean_t = bool;
+		using integer_t = int32_t;
+		using unsigned_t = uint32_t;
+		using real_t = double;
+		using string_t = std::string;
+	};
+
+	template <typename Config = type_config>
 	struct object_t //<name> : <value>
 	{
 		struct array_t;
 		using value_t = boost::variant<
-			config::null_t,
-			config::boolean_t, config::integer_t, config::unsigned_t, config::real_t, config::string_t,
+			Config::null_t,
+			Config::boolean_t, Config::integer_t, Config::unsigned_t, Config::real_t, Config::string_t,
 			boost::recursive_wrapper<object_t>,
 			boost::recursive_wrapper<array_t>>;
-		using value_type = std::pair<config::string_t, value_t>;
+		
+		using value_type = std::pair<Config::string_t, value_t>;
 
-		using holder_t = config::holder_t<config::string_t, value_t>;
+		using holder_t = Config::holder_t<Config::string_t, value_t>;
 
-		struct array_t : config::array_t<object_t::value_t>
+		struct array_t : Config::array_t<object_t::value_t>
 		{
-			using base_t = config::array_t<value_t>;
+			using base_t = Config::array_t<value_t>;
 
 			template <typename...Args>
 			array_t(Args...args)
@@ -114,32 +128,32 @@ namespace json17
 
 		// { "foo" : true }
 		template <typename U, typename std::enable_if<
-			std::is_same<config::null_t, U>::value ||
-			std::is_same<config::boolean_t, U>::value ||
-			std::is_same<config::integer_t, U>::value ||
-			std::is_same<config::unsigned_t, U>::value ||
-			std::is_same<config::real_t, U>::value>::type* = 0>
-			object_t(config::string_t path, U&& val)
+			std::is_same<Config::null_t, U>::value ||
+			std::is_same<Config::boolean_t, U>::value ||
+			std::is_same<Config::integer_t, U>::value ||
+			std::is_same<Config::unsigned_t, U>::value ||
+			std::is_same<Config::real_t, U>::value>::type* = 0>
+			object_t(Config::string_t path, U&& val)
 		{
 			add(path, value_t(std::forward<U>(val)));
 		}
 
 		// { "foo" : "some_string" }
-		template <typename U, typename std::enable_if<std::is_constructible<config::string_t, U>::value>::type* = 0>
-		object_t(config::string_t path, U&& val)
+		template <typename U, typename std::enable_if<std::is_constructible<Config::string_t, U>::value>::type* = 0>
+		object_t(Config::string_t path, U&& val)
 		{
-			add(path, value_t(config::string_t(std::forward<U>(val))));
+			add(path, value_t(Config::string_t(std::forward<U>(val))));
 		}
 
 		// {  "foo" : [1, 2, 3] }
 		template <typename...Args>
-		object_t(config::string_t path, Args...args)
+		object_t(Config::string_t path, Args...args)
 		{
 			add(path, value_t(array_t(args...)));
 		}
 
 		// { "foo" : { "bar" : 10 } }
-		object_t(config::string_t path, object_t obj)
+		object_t(Config::string_t path, object_t obj)
 		{
 			add(path, std::move(obj));
 		}
@@ -153,7 +167,7 @@ namespace json17
 						  });
 		}
 
-		void add(config::string_t key, value_t val)
+		void add(Config::string_t key, value_t val)
 		{
 			_pairs.emplace(key, val);
 		}
@@ -173,17 +187,17 @@ namespace json17
 			return !(*this == other);
 		}
 
-		value_t operator[](const config::string_t& path) const
+		value_t operator[](const Config::string_t& path) const
 		{
 			const auto path_it = _pairs.find(path);
 			if (path_it == _pairs.end())
 			{
-				return config::null_t{};
+				return Config::null_t{};
 			}
 			return path_it->second;
 		}
 
-		value_t& operator[](const config::string_t& path)
+		value_t& operator[](const Config::string_t& path)
 		{
 			const auto path_it = _pairs.find(path);
 			if (path_it == _pairs.end())
@@ -195,12 +209,12 @@ namespace json17
 		}
 
 		template <typename R = object_t>
-		R get_value(const config::string_t& path, R def = R{}) const
+		R get_value(const Config::string_t& path, R def = R{}) const
 		{
 			try
 			{
-				std::vector<config::string_t> v_path;
-				boost::split(v_path, path, boost::is_any_of(config::string_t(".")));
+				std::vector<Config::string_t> v_path;
+				boost::split(v_path, path, boost::is_any_of(Config::string_t(".")));
 				if (v_path.size() == 1)
 				{
 					return boost::get<R>(operator[](path));
@@ -209,7 +223,7 @@ namespace json17
 				{
 					auto val = operator[](*std::begin(v_path));
 					v_path.erase(std::begin(v_path));
-					return boost::get<object_t>(val).get_value<R>(boost::join(v_path, config::string_t(".")), def);
+					return boost::get<object_t>(val).get_value<R>(boost::join(v_path, Config::string_t(".")), def);
 				}
 			}
 			catch (std::exception&)
@@ -221,12 +235,12 @@ namespace json17
 		holder_t _pairs;
 	};
 
-	using null_t = config::null_t;
-	using boolean_t = config::boolean_t;
-	using unsigned_t = config::unsigned_t;
-	using integer_t = config::integer_t;
-	using real_t = config::real_t;
-	using string_t = config::string_t;
+	using null_t = Config::null_t;
+	using boolean_t = Config::boolean_t;
+	using unsigned_t = Config::unsigned_t;
+	using integer_t = Config::integer_t;
+	using real_t = Config::real_t;
+	using string_t = Config::string_t;
 	using array_t = object_t::array_t;
 	using value_t = object_t::value_t;
 }
@@ -254,13 +268,13 @@ namespace boost { namespace spirit { namespace x3 { namespace traits {
 //////////////////////////////////////////////////////////////////////////
 
 //////////////////////////////////////////////////////////////////////////
-// boost.spirit.karma adopting
+// boost.spirit.karma adapting
 //////////////////////////////////////////////////////////////////////////
 
-BOOST_FUSION_ADAPT_STRUCT(json17::object_t, (json17::object_t::holder_t, _pairs))
+BOOST_FUSION_ADAPT_STRUCT(json17::object_t, _pairs)
 
 //////////////////////////////////////////////////////////////////////////
-// ! boost.spirit.karma adopting
+// ! boost.spirit.karma adapting
 //////////////////////////////////////////////////////////////////////////
 
 //////////////////////////////////////////////////////////////////////////
@@ -321,20 +335,20 @@ namespace json17
 		static auto r_value = x3::rule<struct value_, object_t::value_t>{ "value_t" };
 		static auto r_object = x3::rule<struct object_t_, object_t>{ "object_t" };
 
-		static auto r_string = x3::rule<struct string_t_, config::string_t>{ "string_t" };
+		static auto r_string = x3::rule<struct string_t_, Config::string_t>{ "string_t" };
 		static auto r_string_def = x3::lexeme['"' >> *(non_escaped_string | escaped_string) >> '"'];
 
 		static auto r_array = x3::rule<struct array_t_, array_t>{ "array_t" };
 		static auto r_array_def = '[' >> -(r_value % ',') >> ']';
 
-		static auto r_integer = x3::rule<struct numeric_t_, config::integer_t>{ "numeric_t" };
-		static auto r_integer_def = x3::int_parser<config::integer_t>{};
+		static auto r_integer = x3::rule<struct numeric_t_, Config::integer_t>{ "numeric_t" };
+		static auto r_integer_def = x3::int_parser<Config::integer_t>{};
 
-		static auto r_unsigned = x3::rule<struct unsigned_t_, config::unsigned_t>{ "unsigned_t" };
-		static auto r_unsigned_def = x3::uint_parser<config::unsigned_t>{};
+		static auto r_unsigned = x3::rule<struct unsigned_t_, Config::unsigned_t>{ "unsigned_t" };
+		static auto r_unsigned_def = x3::uint_parser<Config::unsigned_t>{};
 
-		static auto r_real = x3::rule<struct real_, config::real_t>{ "real_t" };
-		static auto r_real_def = x3::real_parser<config::real_t>{};
+		static auto r_real = x3::rule<struct real_, Config::real_t>{ "real_t" };
+		static auto r_real_def = x3::real_parser<Config::real_t>{};
 
 		static auto r_numeric = x3::lexeme[r_unsigned >> !x3::char_(".eE")] | x3::lexeme[r_integer >> !x3::char_(".eE")] | r_real;
 
@@ -350,11 +364,11 @@ namespace json17
 	{
 		generator() : generator::base_type(_start)
 		{
-			_boolean.add(config::boolean_t(false), "false")(config::boolean_t(true), "true");
+			_boolean.add(Config::boolean_t(false), "false")(Config::boolean_t(true), "true");
 
-			_unsigned = karma::uint_generator<config::unsigned_t>{};
-			_integer = karma::uint_generator<config::unsigned_t>{};
-			_real = karma::real_generator<config::real_t>{};
+			_unsigned = karma::uint_generator<Config::unsigned_t>{};
+			_integer = karma::uint_generator<Config::unsigned_t>{};
+			_real = karma::real_generator<Config::real_t>{};
 
 			_value = karma::attr_cast<null_t>(karma::lit("null")) | _boolean | _integer | _unsigned | _real | _string | _array | _object;
 			_array = '[' << -(_value % ',') << ']';
@@ -385,7 +399,7 @@ namespace json17
 		}
 
 	private:
-		karma::symbols<boolean_t, config::string_t> _boolean;
+		karma::symbols<boolean_t, Config::string_t> _boolean;
 
 		karma::rule<Iterator, object_t(), Delimiter> _start;
 
@@ -397,14 +411,14 @@ namespace json17
 		karma::rule<Iterator, unsigned_t(), Delimiter>  _unsigned;
 		karma::rule<Iterator, real_t(), Delimiter>  _real;
 
-		karma::rule<Iterator, config::string_t()> _string;
+		karma::rule<Iterator, Config::string_t()> _string;
 		karma::rule<Iterator, char()>     _char;
 		karma::rule<Iterator, uint32_t()> _utf8_escaped;
 
-		karma::symbols<char, config::string_t>    _char_escape;
+		karma::symbols<char, Config::string_t>    _char_escape;
 	};
 
-	inline object_t from_string(const config::string_t &input)
+	inline object_t from_string(const Config::string_t &input)
 	{
 		namespace x3 = boost::spirit::x3;
 
@@ -418,14 +432,14 @@ namespace json17
 		else
 		{
 			std::stringstream ss;
-			ss << "failed to parse, remaining : [" << std::quoted(config::string_t{ f, l }) << "]";
+			ss << "failed to parse, remaining : [" << std::quoted(Config::string_t{ f, l }) << "]";
 			throw std::runtime_error(ss.str());
 		}
 	}
 
- 	inline config::string_t to_string(const object_t& obj)
+ 	inline Config::string_t to_string(const object_t& obj)
  	{
-		config::string_t output;
+		Config::string_t output;
 		auto out = std::back_inserter(output);
 
 		static const generator<decltype(out), qi::unused_type> g;
@@ -435,6 +449,6 @@ namespace json17
  	}
 }
 //////////////////////////////////////////////////////////////////////////
-// !json17 json17 serialize/de-serialize
+// !json17 serialize/de-serialize
 //////////////////////////////////////////////////////////////////////////
 

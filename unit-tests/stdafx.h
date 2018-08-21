@@ -15,4 +15,3 @@
 #include <boost/test/utils/runtime/cla/parser.hpp>
 #include <boost/test/unit_test_log.hpp>
 #include <boost/test/unit_test_log_formatter.hpp>
-
