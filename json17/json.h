@@ -6,6 +6,8 @@
 #define BOOST_SPIRIT_X3_DEBUG
 #endif
 
+#include <boost/type_index.hpp>
+
 #include <boost/variant.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/fusion/adapted.hpp>
@@ -18,18 +20,22 @@
 #include <boost/spirit/include/qi.hpp>
 #include <boost/blank.hpp>
 
+#include <iostream>
 #include <cstdint>
 #include <iomanip>
 #include <sstream>
 #include <initializer_list>
 #include <vector>
 #include <exception>
+#include <unordered_map>
+#include <type_traits>
 
 //////////////////////////////////////////////////////////////////////////
 // json17 detail
 //////////////////////////////////////////////////////////////////////////
 namespace json17
 {
+#if 0
 	namespace detail
 	{
 		struct add_utf8_sym_ex
@@ -45,7 +51,7 @@ namespace json17
 
 		static auto add_utf8_sym = [](auto& ctx)
 		{
-			using back_inserter_t = std::back_insert_iterator<Config::string_t>;
+			using back_inserter_t = std::back_insert_iterator<TConfig::string_t>;
 			back_inserter_t out_iter(x3::_val(ctx));
 			boost::utf8_output_iterator<back_inserter_t> utf8_iter(out_iter);
 			*utf8_iter++ = x3::_attr(ctx);
@@ -58,7 +64,7 @@ namespace json17
 			return oss.str();
 		}
 
-		static void append_utf8(Config::string_t& to, uint32_t codepoint)
+		static void append_utf8(TConfig::string_t& to, uint32_t codepoint)
 		{
 			auto out = std::back_inserter(to);
 			boost::utf8_output_iterator<decltype(out)> convert(out);
@@ -67,6 +73,7 @@ namespace json17
 
 		BOOST_PHOENIX_ADAPT_FUNCTION(std::string, utf8_escape_phx, detail::utf8_escape, 1)
 	}
+#endif
 }
 //////////////////////////////////////////////////////////////////////////
 // !json17 detail
@@ -85,81 +92,137 @@ namespace json17
 		using unsigned_t = uint32_t;
 		using real_t = double;
 		using string_t = std::string;
+
+		template <typename T>
+		using array_t = std::vector<T>;
 	};
 
-	template <typename Config = type_config>
-	struct object_t //<name> : <value>
+	template <typename TConfig>
+	struct array_t;
+
+	template <typename TConfig>
+	struct object_t;
+
+	template <typename TConfig>
+	using value_base_t = boost::variant<
+		typename TConfig::null_t,
+		typename TConfig::boolean_t, typename TConfig::integer_t, typename TConfig::unsigned_t, typename TConfig::real_t, typename TConfig::string_t,
+		boost::recursive_wrapper<object_t<TConfig>>,
+		boost::recursive_wrapper<array_t<TConfig>>
+	>;
+
+	template <typename TConfig>
+	struct value_t : value_base_t<TConfig>
 	{
-		struct array_t;
-		using value_t = boost::variant<
-			Config::null_t,
-			Config::boolean_t, Config::integer_t, Config::unsigned_t, Config::real_t, Config::string_t,
-			boost::recursive_wrapper<object_t>,
-			boost::recursive_wrapper<array_t>>;
+		using base_t = value_base_t<TConfig>;
+
+		// use base_t ctor's
+		using base_t::base_t;
 		
-		using value_type = std::pair<Config::string_t, value_t>;
-
-		using holder_t = Config::holder_t<Config::string_t, value_t>;
-
-		struct array_t : Config::array_t<object_t::value_t>
+		value_t(const typename TConfig::string_t::value_type* val)
+			: base_t(TConfig::string_t(val))
 		{
-			using base_t = Config::array_t<value_t>;
-
-			template <typename...Args>
-			array_t(Args...args)
-				: base_t(std::initializer_list<object_t::value_t>{object_t::value_t(args)...})
-			{
-			}
-
-			template <typename T>
-			array_t(std::initializer_list<T> il)
-				: base_t(std::begin(il), std::end(il))
-			{
-			}
-
-			array_t(std::initializer_list<object_t::value_t> il)
-				: base_t(il)
-			{
-			}
-		};
-
-		// default
-		object_t() = default;
-
-		// { "foo" : true }
-		template <typename U, typename std::enable_if<
-			std::is_same<Config::null_t, U>::value ||
-			std::is_same<Config::boolean_t, U>::value ||
-			std::is_same<Config::integer_t, U>::value ||
-			std::is_same<Config::unsigned_t, U>::value ||
-			std::is_same<Config::real_t, U>::value>::type* = 0>
-			object_t(Config::string_t path, U&& val)
-		{
-			add(path, value_t(std::forward<U>(val)));
 		}
 
-		// { "foo" : "some_string" }
-		template <typename U, typename std::enable_if<std::is_constructible<Config::string_t, U>::value>::type* = 0>
-		object_t(Config::string_t path, U&& val)
+		template <typename T>
+		bool operator==(const T& rhs) const
 		{
-			add(path, value_t(Config::string_t(std::forward<U>(val))));
+			return boost::apply_visitor([&rhs](const auto& val) 
+										{ 
+											if constexpr (std::is_same_v<value_t<TConfig>, std::decay_t<T>>)
+											{
+												// swap
+												return rhs == val;
+											}
+											else if constexpr (std::is_same_v<std::decay_t<decltype(val)>, std::decay_t<T>>)
+											{
+												return val == rhs;
+											}
+											else if constexpr (std::is_same_v<std::decay_t<decltype(val)>, TConfig::string_t> &&
+															   std::is_constructible_v<TConfig::string_t, std::decay_t<decltype(rhs)>>)
+											{
+												return val == rhs;
+											}
+											else
+											{
+												return false;
+											}
+										},
+										*this);
+		}
+
+		template <typename T>
+		bool operator!=(const T& rhs) const
+		{
+			return !(this->operator ==(rhs));
+		}
+	};
+
+	template <typename TConfig>
+	struct array_t : TConfig::template array_t<value_t<TConfig>>
+	{
+		using base_t = typename TConfig::template array_t<value_t<TConfig>>;
+		
+		using base_t::base_t;
+		using base_t::begin;
+		using base_t::end;
+
+		template <typename...Args>
+		array_t(Args...args)
+			: base_t(std::initializer_list<value_t<TConfig>>{value_t<TConfig>(args)...})
+		{
+		}
+
+		template <typename T>
+		array_t(std::initializer_list<T> il)
+			: base_t(std::begin(il), std::end(il))
+		{
+		}
+
+		array_t(std::initializer_list<value_t<TConfig>> il)
+			: base_t(il)
+		{
+		}
+
+		bool operator==(const array_t<TConfig>& rhs) const
+		{
+			const auto p = std::mismatch(this->begin(), this->end(), rhs.begin(), rhs.end());
+			return p.first == this->end() && p.second == rhs.end();
+		}
+
+		bool operator!=(const array_t<TConfig>& rhs) const
+		{
+			return !(*this == rhs);
+		}
+
+	};
+
+	template <typename TConfig>
+	struct object_t //<name> : <value>
+	{
+		object_t() = default;
+
+		template <typename T>
+		object_t(typename TConfig::string_t path, T&& val)
+		{
+			add(path, value_t<TConfig>(std::forward<T>(val)));
 		}
 
 		// {  "foo" : [1, 2, 3] }
 		template <typename...Args>
-		object_t(Config::string_t path, Args...args)
+		object_t(typename TConfig::string_t path, Args...args)
 		{
-			add(path, value_t(array_t(args...)));
+			add(path, array_t<TConfig>(args...));
 		}
 
 		// { "foo" : { "bar" : 10 } }
-		object_t(Config::string_t path, object_t obj)
+		object_t(typename TConfig::string_t path, object_t<TConfig> obj)
 		{
 			add(path, std::move(obj));
 		}
 
 		// { {"foo" : true}, {"bar" : 4} }
-		object_t(std::initializer_list<object_t> il)
+		object_t(std::initializer_list<object_t<TConfig>> il)
 		{
 			std::for_each(std::begin(il), std::end(il), [this](const auto& v)
 						  {
@@ -167,83 +230,164 @@ namespace json17
 						  });
 		}
 
-		void add(Config::string_t key, value_t val)
+		object_t(const value_t<TConfig>& val)
+			: object_t<TConfig>(boost::apply_visitor([](const auto& v)
+										{
+											if constexpr (std::is_same_v<std::decay_t<decltype(v)>, object_t<TConfig>>)
+											{
+												return v;
+											}
+											else
+											{
+												static_assert("can't construct object");
+												return object_t<TConfig>();
+											}
+										}, val))
+		{
+		}
+
+		bool operator==(const object_t<TConfig>& rhs) const
+		{
+			return _pairs == rhs._pairs;
+		}
+
+		bool operator!=(const object_t<TConfig>& rhs) const
+		{
+			return !(*this == rhs);
+		}
+
+		using holder_t = std::unordered_map<typename TConfig::string_t, value_t<TConfig>>;
+		holder_t _pairs;
+
+		void add(typename holder_t::key_type key, typename holder_t::mapped_type val)
 		{
 			_pairs.emplace(key, val);
 		}
 
-		void add(value_type&& val)
+		void add(typename holder_t::value_type&& val)
 		{
 			_pairs.insert(std::move(val));
 		}
 
-		bool operator==(const object_t& other) const
+		value_t<TConfig>& operator[](const typename TConfig::string_t& path)
 		{
-			return _pairs == other._pairs;
-		}
-
-		bool operator!=(const object_t& other) const
-		{
-			return !(*this == other);
-		}
-
-		value_t operator[](const Config::string_t& path) const
-		{
-			const auto path_it = _pairs.find(path);
-			if (path_it == _pairs.end())
+			bool is_found = false;
+			auto get_value = [this, &is_found](const TConfig::string_t& key) -> value_t<TConfig>&
 			{
-				return Config::null_t{};
-			}
-			return path_it->second;
-		}
-
-		value_t& operator[](const Config::string_t& path)
-		{
-			const auto path_it = _pairs.find(path);
-			if (path_it == _pairs.end())
-			{
-				_pairs[path] = value_t{};
-				return _pairs[path];
-			};
-			return path_it->second;
-		}
-
-		template <typename R = object_t>
-		R get_value(const Config::string_t& path, R def = R{}) const
-		{
-			try
-			{
-				std::vector<Config::string_t> v_path;
-				boost::split(v_path, path, boost::is_any_of(Config::string_t(".")));
-				if (v_path.size() == 1)
+				const auto path_it = _pairs.find(key);
+				if (path_it == _pairs.end())
 				{
-					return boost::get<R>(operator[](path));
+					is_found = false;
+					_pairs.insert(std::make_pair(key, TConfig::null_t{}));
+					return _pairs.find(key)->second;
+				};
+				is_found = true;
+				return path_it->second;
+			};
+
+			// split path
+			std::vector<TConfig::string_t> v_path;
+			if constexpr (std::is_same_v<TConfig::string_t::value_type, std::string::value_type>)
+			{
+				boost::split(v_path, path, boost::is_any_of(TConfig::string_t(".")));
+			}
+			else
+			{
+				// handle wchar_t
+				boost::split(v_path, path, boost::is_any_of(TConfig::string_t(L".")));
+			}
+
+			// traverse recursively
+			const auto front_key = v_path.front();
+			if (v_path.size() == 1)
+			{
+				return get_value(front_key);
+			}
+			else
+			{
+				// remove first entry 
+				v_path.erase(v_path.begin());
+
+				// try to get value
+				auto& key_val = get_value(front_key);
+				if (is_found) // found = yes
+				{
+					return boost::apply_visitor([&v_path](auto& v) -> value_t<TConfig>&
+												{
+													if constexpr (std::is_same_v<std::decay_t<decltype(v)>, object_t<TConfig>>)
+													{
+														if constexpr (std::is_same_v<TConfig::string_t::value_type, std::string::value_type>)
+														{
+															return v.operator [](boost::join(v_path, TConfig::string_t(".")));
+														}
+														else
+														{
+															// handle wchar_t
+															return v.operator [](boost::join(v_path, TConfig::string_t(L".")));
+														}
+													}
+													else
+													{
+														// some value is given but not object_t for deeper traversing
+														throw std::runtime_error("can't traverse json : expected sub-level but value is obtained");
+													}
+												},
+												key_val);
 				}
 				else
 				{
-					auto val = operator[](*std::begin(v_path));
-					v_path.erase(std::begin(v_path));
-					return boost::get<object_t>(val).get_value<R>(boost::join(v_path, Config::string_t(".")), def);
+					// add null_t
+					auto obj = object_t<TConfig>(front_key, TConfig::null_t{});
+					_pairs[front_key] = obj;
+
+					// handle wchar_t
+					if constexpr (std::is_same_v<TConfig::string_t::value_type, std::string::value_type>)
+					{
+						return obj.operator [](boost::join(v_path, TConfig::string_t(".")));
+					}
+					else
+					{
+						// handle wchar_t
+						return obj.operator [](boost::join(v_path, TConfig::string_t(L".")));
+					}
 				}
 			}
-			catch (std::exception&)
-			{
-				return def;
-			}
 		}
-
-		holder_t _pairs;
 	};
-
-	using null_t = Config::null_t;
-	using boolean_t = Config::boolean_t;
-	using unsigned_t = Config::unsigned_t;
-	using integer_t = Config::integer_t;
-	using real_t = Config::real_t;
-	using string_t = Config::string_t;
-	using array_t = object_t::array_t;
-	using value_t = object_t::value_t;
 }
+
+//////////////////////////////////////////////////////////////////////////
+// boost.spirit.x3 traits
+//////////////////////////////////////////////////////////////////////////
+namespace boost { namespace spirit { namespace x3 { namespace traits {
+template<typename TConfig>
+struct push_back_container<json17::object_t<TConfig>>
+{
+	template <typename T>
+	static bool call(json17::object_t<TConfig>& obj, T&& val)
+	{
+		obj.add(std::forward<T>(val));
+		return true;
+	}
+};
+}}}}
+//////////////////////////////////////////////////////////////////////////
+// ! boost.spirit.x3 traits
+//////////////////////////////////////////////////////////////////////////
+
+
+//////////////////////////////////////////////////////////////////////////
+// json17::json
+//////////////////////////////////////////////////////////////////////////
+namespace json17
+{
+
+}
+//////////////////////////////////////////////////////////////////////////
+// !json17::json
+//////////////////////////////////////////////////////////////////////////
+
+#if 0
 //////////////////////////////////////////////////////////////////////////
 // !json17 types
 //////////////////////////////////////////////////////////////////////////
@@ -252,17 +396,17 @@ namespace json17
 // boost.spirit.x3 traits
 //////////////////////////////////////////////////////////////////////////
 namespace boost { namespace spirit { namespace x3 { namespace traits {
-	template<>
-	struct push_back_container<json17::object_t>
+template<>
+struct push_back_container<json17::object_t>
+{
+	template <typename T>
+	static bool call(json17::object_t& obj, T&& val)
 	{
-		template <typename T>
-		static bool call(json17::object_t& obj, T&& val)
-		{
-			obj.add(std::forward<T>(val));
-			return true;
-		}
-	};
-} } } }
+		obj.add(std::forward<T>(val));
+		return true;
+	}
+};
+}}}}
 //////////////////////////////////////////////////////////////////////////
 // ! boost.spirit.x3 traits
 //////////////////////////////////////////////////////////////////////////
@@ -285,8 +429,8 @@ namespace json17
 	namespace x3 = boost::spirit::x3;
 	namespace phx = boost::phoenix;
 	namespace fusion = boost::fusion;
-	
-	namespace qi = boost::spirit::qi; 
+
+	namespace qi = boost::spirit::qi;
 	namespace karma = boost::spirit::karma;
 
 	namespace encoding = boost::spirit::ascii;
@@ -335,20 +479,20 @@ namespace json17
 		static auto r_value = x3::rule<struct value_, object_t::value_t>{ "value_t" };
 		static auto r_object = x3::rule<struct object_t_, object_t>{ "object_t" };
 
-		static auto r_string = x3::rule<struct string_t_, Config::string_t>{ "string_t" };
+		static auto r_string = x3::rule<struct string_t_, TConfig::string_t>{ "string_t" };
 		static auto r_string_def = x3::lexeme['"' >> *(non_escaped_string | escaped_string) >> '"'];
 
 		static auto r_array = x3::rule<struct array_t_, array_t>{ "array_t" };
 		static auto r_array_def = '[' >> -(r_value % ',') >> ']';
 
-		static auto r_integer = x3::rule<struct numeric_t_, Config::integer_t>{ "numeric_t" };
-		static auto r_integer_def = x3::int_parser<Config::integer_t>{};
+		static auto r_integer = x3::rule<struct numeric_t_, TConfig::integer_t>{ "numeric_t" };
+		static auto r_integer_def = x3::int_parser<TConfig::integer_t>{};
 
-		static auto r_unsigned = x3::rule<struct unsigned_t_, Config::unsigned_t>{ "unsigned_t" };
-		static auto r_unsigned_def = x3::uint_parser<Config::unsigned_t>{};
+		static auto r_unsigned = x3::rule<struct unsigned_t_, TConfig::unsigned_t>{ "unsigned_t" };
+		static auto r_unsigned_def = x3::uint_parser<TConfig::unsigned_t>{};
 
-		static auto r_real = x3::rule<struct real_, Config::real_t>{ "real_t" };
-		static auto r_real_def = x3::real_parser<Config::real_t>{};
+		static auto r_real = x3::rule<struct real_, TConfig::real_t>{ "real_t" };
+		static auto r_real_def = x3::real_parser<TConfig::real_t>{};
 
 		static auto r_numeric = x3::lexeme[r_unsigned >> !x3::char_(".eE")] | x3::lexeme[r_integer >> !x3::char_(".eE")] | r_real;
 
@@ -364,11 +508,11 @@ namespace json17
 	{
 		generator() : generator::base_type(_start)
 		{
-			_boolean.add(Config::boolean_t(false), "false")(Config::boolean_t(true), "true");
+			_boolean.add(TConfig::boolean_t(false), "false")(TConfig::boolean_t(true), "true");
 
-			_unsigned = karma::uint_generator<Config::unsigned_t>{};
-			_integer = karma::uint_generator<Config::unsigned_t>{};
-			_real = karma::real_generator<Config::real_t>{};
+			_unsigned = karma::uint_generator<TConfig::unsigned_t>{};
+			_integer = karma::uint_generator<TConfig::unsigned_t>{};
+			_real = karma::real_generator<TConfig::real_t>{};
 
 			_value = karma::attr_cast<null_t>(karma::lit("null")) | _boolean | _integer | _unsigned | _real | _string | _array | _object;
 			_array = '[' << -(_value % ',') << ']';
@@ -376,7 +520,7 @@ namespace json17
 			_object = '{' << -((_string << ':' << _value) % ',') << '}';
 
 			_char_escape.add
-			    ('"', "\\\"")
+			('"', "\\\"")
 				('\\', "\\\\")
 				//('/',  "\\/")
 				('\b', "\\b")
@@ -386,7 +530,7 @@ namespace json17
 				('\t', "\\t");
 
 			_utf8_escaped =
-				karma::eps(karma::_val >= uint32_t(0x0) && karma::_val <= uint32_t(0x1f)) << 
+				karma::eps(karma::_val >= uint32_t(0x0) && karma::_val <= uint32_t(0x1f)) <<
 				karma::string[karma::_1 = detail::utf8_escape_phx(karma::_val)];
 
 			_char = _char_escape | _utf8_escaped | encoding::char_;
@@ -399,7 +543,7 @@ namespace json17
 		}
 
 	private:
-		karma::symbols<boolean_t, Config::string_t> _boolean;
+		karma::symbols<boolean_t, TConfig::string_t> _boolean;
 
 		karma::rule<Iterator, object_t(), Delimiter> _start;
 
@@ -411,14 +555,14 @@ namespace json17
 		karma::rule<Iterator, unsigned_t(), Delimiter>  _unsigned;
 		karma::rule<Iterator, real_t(), Delimiter>  _real;
 
-		karma::rule<Iterator, Config::string_t()> _string;
+		karma::rule<Iterator, TConfig::string_t()> _string;
 		karma::rule<Iterator, char()>     _char;
 		karma::rule<Iterator, uint32_t()> _utf8_escaped;
 
-		karma::symbols<char, Config::string_t>    _char_escape;
+		karma::symbols<char, TConfig::string_t>    _char_escape;
 	};
 
-	inline object_t from_string(const Config::string_t &input)
+	inline object_t from_string(const TConfig::string_t &input)
 	{
 		namespace x3 = boost::spirit::x3;
 
@@ -432,23 +576,24 @@ namespace json17
 		else
 		{
 			std::stringstream ss;
-			ss << "failed to parse, remaining : [" << std::quoted(Config::string_t{ f, l }) << "]";
+			ss << "failed to parse, remaining : [" << std::quoted(TConfig::string_t{ f, l }) << "]";
 			throw std::runtime_error(ss.str());
 		}
 	}
 
- 	inline Config::string_t to_string(const object_t& obj)
- 	{
-		Config::string_t output;
+	inline TConfig::string_t to_string(const object_t& obj)
+	{
+		TConfig::string_t output;
 		auto out = std::back_inserter(output);
 
 		static const generator<decltype(out), qi::unused_type> g;
 		karma::generate(out, g, obj);
 
 		return output;
- 	}
+	}
 }
 //////////////////////////////////////////////////////////////////////////
 // !json17 serialize/de-serialize
 //////////////////////////////////////////////////////////////////////////
 
+#endif
