@@ -6,21 +6,23 @@
 #define BOOST_SPIRIT_X3_DEBUG
 #endif
 
-#include <boost/type_index.hpp>
-
+#include <boost/blank.hpp>
 #include <boost/variant.hpp>
-#include <boost/algorithm/string.hpp>
+
 #include <boost/fusion/adapted.hpp>
 #include <boost/fusion/adapted/std_pair.hpp>
 #include <boost/spirit/home/x3.hpp>
 #include <boost/spirit/include/phoenix.hpp>
 #include <boost/spirit/home/x3/support/traits/container_traits.hpp>
+#include <boost/spirit/include/support_istream_iterator.hpp>
 
 #include <boost/spirit/include/karma.hpp>
 #include <boost/spirit/include/qi.hpp>
-#include <boost/blank.hpp>
 
-#include <iostream>
+#include <boost/algorithm/string.hpp>
+
+#include <boost/filesystem.hpp>
+
 #include <cstdint>
 #include <iomanip>
 #include <sstream>
@@ -29,6 +31,8 @@
 #include <exception>
 #include <unordered_map>
 #include <type_traits>
+#include <locale>
+#include <codecvt>
 
 //////////////////////////////////////////////////////////////////////////
 // json17 detail
@@ -194,7 +198,6 @@ namespace json17
 		{
 			return !(*this == rhs);
 		}
-
 	};
 
 	template <typename TConfig>
@@ -230,6 +233,7 @@ namespace json17
 						  });
 		}
 
+		// { "foo" : {...} }
 		object_t(const value_t<TConfig>& val)
 			: object_t<TConfig>(boost::apply_visitor([](const auto& v)
 										{
@@ -286,16 +290,7 @@ namespace json17
 			};
 
 			// split path
-			std::vector<TConfig::string_t> v_path;
-			if constexpr (std::is_same_v<TConfig::string_t::value_type, std::string::value_type>)
-			{
-				boost::split(v_path, path, boost::is_any_of(TConfig::string_t(".")));
-			}
-			else
-			{
-				// handle wchar_t
-				boost::split(v_path, path, boost::is_any_of(TConfig::string_t(L".")));
-			}
+			auto v_path = split_path(path);
 
 			// traverse recursively
 			const auto front_key = v_path.front();
@@ -312,19 +307,11 @@ namespace json17
 				auto& key_val = get_value(front_key);
 				if (is_found) // found = yes
 				{
-					return boost::apply_visitor([&v_path](auto& v) -> value_t<TConfig>&
+					return boost::apply_visitor([&v_path, this](auto& v) -> value_t<TConfig>&
 												{
 													if constexpr (std::is_same_v<std::decay_t<decltype(v)>, object_t<TConfig>>)
 													{
-														if constexpr (std::is_same_v<TConfig::string_t::value_type, std::string::value_type>)
-														{
-															return v.operator [](boost::join(v_path, TConfig::string_t(".")));
-														}
-														else
-														{
-															// handle wchar_t
-															return v.operator [](boost::join(v_path, TConfig::string_t(L".")));
-														}
+														return join_path_and_invoke(v_path, v);														
 													}
 													else
 													{
@@ -340,19 +327,39 @@ namespace json17
 					auto obj = object_t<TConfig>(front_key, TConfig::null_t{});
 					_pairs[front_key] = obj;
 
-					// handle wchar_t
-					if constexpr (std::is_same_v<TConfig::string_t::value_type, std::string::value_type>)
-					{
-						return obj.operator [](boost::join(v_path, TConfig::string_t(".")));
-					}
-					else
-					{
-						// handle wchar_t
-						return obj.operator [](boost::join(v_path, TConfig::string_t(L".")));
-					}
+					return join_path_and_invoke(v_path, obj);
 				}
 			}
 		}
+
+		private:
+			auto split_path(const typename TConfig::string_t& path) const
+			{
+				std::vector<TConfig::string_t> v_path;
+				if constexpr (std::is_same_v<TConfig::string_t::value_type, std::string::value_type>)
+				{
+					boost::split(v_path, path, boost::is_any_of(TConfig::string_t(".")));
+				}
+				else
+				{
+					// handle wchar_t
+					boost::split(v_path, path, boost::is_any_of(TConfig::string_t(L".")));
+				}
+				return v_path;
+			}
+
+			auto& join_path_and_invoke(const std::vector<typename TConfig::string_t>& v_path, object_t<TConfig>& obj)
+			{
+				if constexpr (std::is_same_v<TConfig::string_t::value_type, std::string::value_type>)
+				{
+					return obj.operator [](boost::join(v_path, TConfig::string_t(".")));
+				}
+				else
+				{
+					// handle wchar_t
+					return obj.operator [](boost::join(v_path, TConfig::string_t(L".")));
+				}
+			}
 	};
 }
 
@@ -375,13 +382,177 @@ struct push_back_container<json17::object_t<TConfig>>
 // ! boost.spirit.x3 traits
 //////////////////////////////////////////////////////////////////////////
 
+//////////////////////////////////////////////////////////////////////////
+// json17::parser
+//////////////////////////////////////////////////////////////////////////
+namespace json17
+{
+	namespace fs = boost::filesystem;
+	namespace x3 = boost::spirit::x3;
+	namespace phx = boost::phoenix;
+	namespace fusion = boost::fusion;
+
+	template <typename TConfig>
+	struct true_false_t : x3::symbols<typename TConfig::boolean_t>
+	{
+		using base_t = x3::symbols<typename TConfig::boolean_t>;
+		true_false_t()
+		{
+			base_t::add("true", true);
+			base_t::add("false", false);
+		}
+	};
+
+	template <typename TConfig>
+	struct add_sym_ex
+	{
+		add_sym_ex(typename TConfig::string_t::value_type s) : _s(s) {}
+
+		template <typename T>
+		void operator()(const T& ctx) const
+		{
+			x3::_val(ctx) += _s;
+		}
+		typename TConfig::string_t::value_type _s;
+	};
+
+	template <typename TConfig>
+	struct parser
+	{
+		static const auto add_sym = [](auto& ctx)
+		{
+			using back_inserter_t = std::back_insert_iterator<TConfig::string_t>;
+			back_inserter_t out_iter(x3::_val(ctx));
+			boost::utf8_output_iterator<back_inserter_t> iter(out_iter);
+			*iter++ = x3::_attr(ctx);
+		};
+
+		static const auto _4hex = x3::uint_parser<uint32_t, 16, 4, 4>{}[add_sym];
+		static const auto non_escaped_string = (~x3::char_("\"\\"))[([](auto &ctx) { x3::_val(ctx) += x3::_attr(ctx); })];
+		static const auto escaped_string =
+			x3::lit("\x5C") >>                         // \ (reverse solidus)
+			(
+				x3::lit("\x22")[add_sym_ex<TConfig>('"')]  // "    quotation mark  U+0022
+				|
+				x3::lit("\x5C")[add_sym_ex<TConfig>('\\')] // \    reverse solidus U+005C
+				|
+				x3::lit("\x2F")[add_sym_ex<TConfig>('/')]  // /    solidus         U+002F
+				|
+				x3::lit("\x62")[add_sym_ex<TConfig>('\b')]  // b    backspace       U+0008
+				|
+				x3::lit("\x66")[add_sym_ex<TConfig>('\f')]  // f    form feed       U+000C
+				|
+				x3::lit("\x6E")[add_sym_ex<TConfig>('\n')]  // n    line feed       U+000A
+				|
+				x3::lit("\x72")[add_sym_ex<TConfig>('\r')]  // r    carriage return U+000D
+				|
+				x3::lit("\x74")[add_sym_ex<TConfig>('\t')]  // t    tab             U+0009
+				|
+				x3::lit("\x75") >> _4hex           // uXXXX                U+XXXX
+				);
+
+		static const auto r_null = x3::lit("null") >> x3::attr(json17::null_t());
+
+		static const true_false_t<TConfig> r_boolean;
+
+		static const auto r_value = x3::rule<struct value_, value_t<TConfig>>{ "value_t" };
+		static const auto r_object = x3::rule<struct object_t_, object_t<TConfig>>{ "object_t" };
+
+		static const auto r_string = x3::rule<struct string_t_, TConfig::string_t>{ "string_t" };
+		static const auto r_string_def = x3::lexeme['"' >> *(non_escaped_string | escaped_string) >> '"'];
+
+		static const auto r_array = x3::rule<struct array_t_, array_t<TConfig>>{ "array_t" };
+		static const auto r_array_def = '[' >> -(r_value % ',') >> ']';
+
+		static const auto r_integer = x3::rule<struct numeric_t_, TConfig::integer_t>{ "numeric_t" };
+		static const auto r_integer_def = x3::int_parser<TConfig::integer_t>{};
+
+		static const auto r_unsigned = x3::rule<struct unsigned_t_, TConfig::unsigned_t>{ "unsigned_t" };
+		static const auto r_unsigned_def = x3::uint_parser<TConfig::unsigned_t>{};
+
+		static const auto r_real = x3::rule<struct real_, TConfig::real_t>{ "real_t" };
+		static const auto r_real_def = x3::real_parser<TConfig::real_t>{};
+
+		static const auto r_numeric = x3::lexeme[r_unsigned >> !x3::char_(".eE")] | x3::lexeme[r_integer >> !x3::char_(".eE")] | r_real;
+
+		static const auto r_value_def = r_null | r_boolean | r_numeric | r_string | r_array | r_object;
+
+		static const auto r_object_def = '{' >> ((r_string >> ':' >> r_value) % ',') >> '}';
+
+		BOOST_SPIRIT_DEFINE(r_integer, r_unsigned, r_real, r_value, r_array, r_string, r_object);
+	};
+}
+//////////////////////////////////////////////////////////////////////////
+// !json17::parser
+//////////////////////////////////////////////////////////////////////////
+
 
 //////////////////////////////////////////////////////////////////////////
 // json17::json
 //////////////////////////////////////////////////////////////////////////
 namespace json17
 {
+	template <typename TConfig = type_config>
+	struct json : object_t<TConfig>
+	{
+		using base_t = object_t<TConfig>;
 
+		using base_t::base_t;
+		using base_t::operator ==;
+		using base_t::operator !=;
+		using base_t::operator [];
+
+		void operator<<(const std::istream& input)
+		{
+			*this = std::move(parse(input));
+		}
+
+		void operator<<(const typename TConfig::string_t& input)
+		{
+			*this = std::move(parse(input));
+		}
+
+	private :
+		auto parse(const typename TConfig::string_t& str)
+		{
+			auto f(std::begin(str)), l(std::end(str));
+			return parse_impl(f, l);
+		}
+
+		auto parse(const std::istream& input)
+		{
+			boost::spirit::istream_iterator f(input), l;
+			return parse_impl(f, l);
+		}
+
+		template <typename It>
+		auto parse_impl(It f, It l)
+		{
+			namespace x3 = boost::spirit::x3;
+
+			object_t<TConfig> obj;
+			const auto ok = x3::parse(f, l, x3::skip(x3::space)[parser<TConfig>::r_object], obj);
+			if (ok)
+			{
+				return obj;
+			}
+			else
+			{
+				std::stringstream ss;
+				if constexpr (std::is_same_v<TConfig::string_t::value_type, std::string::value_type>)
+				{
+					ss << "failed to parse, remaining : [" << 
+						std::quoted(TConfig::string_t{ f, l }) << "]";
+				}
+				else
+				{
+					ss << "failed to parse, remaining : [" << 
+						std::quoted(std::wstring_convert<std::codecvt_utf8<TConfig::string_t::value_type>>().to_string(typename TConfig::string_t{ f, l })) << "]";
+				}
+				throw std::runtime_error(ss.str());
+			}
+		}
+	};
 }
 //////////////////////////////////////////////////////////////////////////
 // !json17::json
