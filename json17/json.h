@@ -11,13 +11,16 @@
 
 #include <boost/fusion/adapted.hpp>
 #include <boost/fusion/adapted/std_pair.hpp>
-#include <boost/spirit/home/x3.hpp>
+#include <boost/fusion/include/adapt_struct.hpp>
+
 #include <boost/spirit/include/phoenix.hpp>
-#include <boost/spirit/home/x3/support/traits/container_traits.hpp>
 #include <boost/spirit/include/support_istream_iterator.hpp>
+
 
 #include <boost/spirit/include/karma.hpp>
 #include <boost/spirit/include/qi.hpp>
+#include <boost/spirit/include/qi_symbols.hpp>
+#include <boost/spirit/home/support/container.hpp>
 
 #include <boost/algorithm/string.hpp>
 
@@ -88,19 +91,6 @@ namespace json17
 //////////////////////////////////////////////////////////////////////////
 namespace json17
 {
-	struct type_config
-	{
-		using null_t = boost::blank;
-		using boolean_t = bool;
-		using integer_t = int32_t;
-		using unsigned_t = uint32_t;
-		using real_t = double;
-		using string_t = std::string;
-
-		template <typename T>
-		using array_t = std::vector<T>;
-	};
-
 	template <typename TConfig>
 	struct array_t;
 
@@ -110,7 +100,11 @@ namespace json17
 	template <typename TConfig>
 	using value_base_t = boost::variant<
 		typename TConfig::null_t,
-		typename TConfig::boolean_t, typename TConfig::integer_t, typename TConfig::unsigned_t, typename TConfig::real_t, typename TConfig::string_t,
+		typename TConfig::boolean_t, 
+		typename TConfig::integer_t, 
+		typename TConfig::unsigned_t, 
+		typename TConfig::real_t, 
+		typename TConfig::string_t,
 		boost::recursive_wrapper<object_t<TConfig>>,
 		boost::recursive_wrapper<array_t<TConfig>>
 	>;
@@ -172,18 +166,18 @@ namespace json17
 		using base_t::end;
 
 		template <typename...Args>
-		array_t(Args...args)
+		array_t(Args...args) noexcept
 			: base_t(std::initializer_list<value_t<TConfig>>{value_t<TConfig>(args)...})
 		{
 		}
 
 		template <typename T>
-		array_t(std::initializer_list<T> il)
+		array_t(std::initializer_list<T> il) noexcept
 			: base_t(std::begin(il), std::end(il))
 		{
 		}
 
-		array_t(std::initializer_list<value_t<TConfig>> il)
+		array_t(std::initializer_list<value_t<TConfig>> il) noexcept
 			: base_t(il)
 		{
 		}
@@ -366,18 +360,11 @@ namespace json17
 //////////////////////////////////////////////////////////////////////////
 // boost.spirit.x3 traits
 //////////////////////////////////////////////////////////////////////////
-namespace boost { namespace spirit { namespace x3 { namespace traits {
-template<typename TConfig>
-struct push_back_container<json17::object_t<TConfig>>
-{
-	template <typename T>
-	static bool call(json17::object_t<TConfig>& obj, T&& val)
-	{
-		obj.add(std::forward<T>(val));
-		return true;
-	}
-};
-}}}}
+BOOST_FUSION_ADAPT_TPL_STRUCT(
+	(TConfig),
+	(json17::object_t)(TConfig),
+	(json17::object_t<TConfig>::template holder_t, _pairs)
+);
 //////////////////////////////////////////////////////////////////////////
 // ! boost.spirit.x3 traits
 //////////////////////////////////////////////////////////////////////////
@@ -388,98 +375,125 @@ struct push_back_container<json17::object_t<TConfig>>
 namespace json17
 {
 	namespace fs = boost::filesystem;
-	namespace x3 = boost::spirit::x3;
+	namespace qi = boost::spirit::qi;
 	namespace phx = boost::phoenix;
 	namespace fusion = boost::fusion;
 
-	template <typename TConfig>
-	struct true_false_t : x3::symbols<typename TConfig::boolean_t>
+	struct type_config
 	{
-		using base_t = x3::symbols<typename TConfig::boolean_t>;
-		true_false_t()
-		{
-			base_t::add("true", true);
-			base_t::add("false", false);
-		}
-	};
-
-	template <typename TConfig>
-	struct add_sym_ex
-	{
-		add_sym_ex(typename TConfig::string_t::value_type s) : _s(s) {}
+		using null_t = boost::blank;
+		using boolean_t = bool;
+		using integer_t = int32_t;
+		using unsigned_t = uint32_t;
+		using real_t = double;
+		using string_t = std::string;
 
 		template <typename T>
-		void operator()(const T& ctx) const
-		{
-			x3::_val(ctx) += _s;
-		}
-		typename TConfig::string_t::value_type _s;
+		using array_t = std::vector<T>;
 	};
 
-	template <typename TConfig>
-	struct parser
+	namespace details
 	{
-		static const auto add_sym = [](auto& ctx)
+		template <typename string_t>
+		void append_utf8(string_t& to, uint32_t codepoint)
 		{
-			using back_inserter_t = std::back_insert_iterator<TConfig::string_t>;
-			back_inserter_t out_iter(x3::_val(ctx));
-			boost::utf8_output_iterator<back_inserter_t> iter(out_iter);
-			*iter++ = x3::_attr(ctx);
+			auto out = std::back_inserter(to);
+			if (sizeof(typename string_t::value_type) == 1)
+			{
+				boost::utf8_output_iterator<decltype(out)> convert(out);
+				*convert++ = codepoint;
+			}
+			else if(sizeof(typename string_t::value_type) == 2)
+			{
+				boost::utf16_output_iterator<decltype(out)> convert(out);
+				*convert++ = codepoint;
+			}
+		}
+	}
+	BOOST_PHOENIX_ADAPT_FUNCTION(void, append_utf8, details::append_utf8, 2);
+
+	template <typename It>
+	struct skipper : qi::grammar<It>
+	{
+		skipper() : skipper::base_type(rule) {}
+		const qi::rule<It> rule = qi::ascii::space
+			| ("//" >> *~qi::char_("\n") >> -qi::eol)
+			| ("/*" >> *(qi::char_ - "*/") >> "*/")
+			;
+	};
+
+	template <typename TConfig, typename It, typename Skipper>
+	struct parser : qi::grammar<It, object_t<TConfig>(), Skipper>
+	{
+		using null_t = typename TConfig::null_t;
+		using boolean_t = typename TConfig::boolean_t;
+		using unsigned_t = typename TConfig::unsigned_t;
+		using integer_t = typename TConfig::integer_t;
+		using real_t = typename TConfig::real_t;
+		using string_t = typename TConfig::string_t;
+
+		struct true_false : qi::symbols<typename string_t::value_type, boolean_t>
+		{
+			using base_t = qi::symbols<typename string_t::value_type, boolean_t>;
+			true_false()
+			{
+				base_t::add("true", true);
+				base_t::add("false", false);
+			}
 		};
 
-		static const auto _4hex = x3::uint_parser<uint32_t, 16, 4, 4>{}[add_sym];
-		static const auto non_escaped_string = (~x3::char_("\"\\"))[([](auto &ctx) { x3::_val(ctx) += x3::_attr(ctx); })];
-		static const auto escaped_string =
-			x3::lit("\x5C") >>                         // \ (reverse solidus)
-			(
-				x3::lit("\x22")[add_sym_ex<TConfig>('"')]  // "    quotation mark  U+0022
+		parser() : parser::base_type(_object_r, "json17::parser")
+		{
+			_null_r = qi::lit("null") >> qi::attr(null_t());
+			_unsigned_r = qi::uint_parser<unsigned_t>{};
+			_integer_r = qi::int_parser<integer_t>{};
+			_real_r = qi::real_parser<real_t>{};
+
+			_4hex = qi::uint_parser<uint32_t, 16, 4, 4>{};
+			_char_r =
+				+(~qi::char_("\"\\"))[qi::_val += qi::_1]
 				|
-				x3::lit("\x5C")[add_sym_ex<TConfig>('\\')] // \    reverse solidus U+005C
-				|
-				x3::lit("\x2F")[add_sym_ex<TConfig>('/')]  // /    solidus         U+002F
-				|
-				x3::lit("\x62")[add_sym_ex<TConfig>('\b')]  // b    backspace       U+0008
-				|
-				x3::lit("\x66")[add_sym_ex<TConfig>('\f')]  // f    form feed       U+000C
-				|
-				x3::lit("\x6E")[add_sym_ex<TConfig>('\n')]  // n    line feed       U+000A
-				|
-				x3::lit("\x72")[add_sym_ex<TConfig>('\r')]  // r    carriage return U+000D
-				|
-				x3::lit("\x74")[add_sym_ex<TConfig>('\t')]  // t    tab             U+0009
-				|
-				x3::lit("\x75") >> _4hex           // uXXXX                U+XXXX
-				);
+				qi::lit("\x5C") >>
+				(                    // \ (reverse solidus)
+					 qi::lit("\x22")[qi::_val += '"']  | // "    quotation mark  U+0022
+					 qi::lit("\x5C")[qi::_val += '\\'] | // \    reverse solidus U+005C
+					 qi::lit("\x2F")[qi::_val += '/']  | // /    solidus         U+002F
+					 qi::lit("\x62")[qi::_val += '\b'] | // b    backspace       U+0008
+					 qi::lit("\x66")[qi::_val += '\f'] | // f    form feed       U+000C
+					 qi::lit("\x6E")[qi::_val += '\n'] | // n    line feed       U+000A
+					 qi::lit("\x72")[qi::_val += '\r'] | // r    carriage return U+000D
+					 qi::lit("\x74")[qi::_val += '\t'] | // t    tab             U+0009
+					 qi::lit("\x75")                         // uXXXX                U+XXXX
+					 >> _4hex[append_utf8(qi::_val, qi::_1)]
+				 );
+			_string_r = qi::lexeme['"' >> *_char_r >> '"'];
 
-		static const auto r_null = x3::lit("null") >> x3::attr(json17::null_t());
+			_array_r = '[' >> -(_value_r % ',') >> ']';
+			_value_r = _null_r 
+				| _boolean_r
+				| qi::lexeme[_unsigned_r >> !qi::char_(".eE")] | qi::lexeme[_integer_r >> !qi::char_(".eE")] | _real_r
+				| _string_r
+				| _array_r
+				| _object_r
+				;
 
-		static const true_false_t<TConfig> r_boolean;
+			_object_r = '{' >> ((_string_r >> ':' >> _value_r) % ',') >> '}';
+		}
+	private:
+		qi::rule<It, uint32_t()> _4hex;
 
-		static const auto r_value = x3::rule<struct value_, value_t<TConfig>>{ "value_t" };
-		static const auto r_object = x3::rule<struct object_t_, object_t<TConfig>>{ "object_t" };
+		qi::rule<It, null_t()> _null_r;
+		true_false _boolean_r;
+		qi::rule<It, unsigned_t()> _unsigned_r;
+		qi::rule<It, integer_t()> _integer_r;
+		qi::rule<It, real_t()> _real_r;
 
-		static const auto r_string = x3::rule<struct string_t_, TConfig::string_t>{ "string_t" };
-		static const auto r_string_def = x3::lexeme['"' >> *(non_escaped_string | escaped_string) >> '"'];
+		qi::rule<It, string_t()> _char_r;
+		qi::rule<It, string_t()> _string_r;
 
-		static const auto r_array = x3::rule<struct array_t_, array_t<TConfig>>{ "array_t" };
-		static const auto r_array_def = '[' >> -(r_value % ',') >> ']';
-
-		static const auto r_integer = x3::rule<struct numeric_t_, TConfig::integer_t>{ "numeric_t" };
-		static const auto r_integer_def = x3::int_parser<TConfig::integer_t>{};
-
-		static const auto r_unsigned = x3::rule<struct unsigned_t_, TConfig::unsigned_t>{ "unsigned_t" };
-		static const auto r_unsigned_def = x3::uint_parser<TConfig::unsigned_t>{};
-
-		static const auto r_real = x3::rule<struct real_, TConfig::real_t>{ "real_t" };
-		static const auto r_real_def = x3::real_parser<TConfig::real_t>{};
-
-		static const auto r_numeric = x3::lexeme[r_unsigned >> !x3::char_(".eE")] | x3::lexeme[r_integer >> !x3::char_(".eE")] | r_real;
-
-		static const auto r_value_def = r_null | r_boolean | r_numeric | r_string | r_array | r_object;
-
-		static const auto r_object_def = '{' >> ((r_string >> ':' >> r_value) % ',') >> '}';
-
-		BOOST_SPIRIT_DEFINE(r_integer, r_unsigned, r_real, r_value, r_array, r_string, r_object);
+		qi::rule<It, array_t<TConfig>(), Skipper> _array_r;
+		qi::rule<It, value_t<TConfig>(), Skipper> _value_r;
+		qi::rule<It, object_t<TConfig>(), Skipper> _object_r;
 	};
 }
 //////////////////////////////////////////////////////////////////////////
@@ -501,6 +515,12 @@ namespace json17
 		using base_t::operator ==;
 		using base_t::operator !=;
 		using base_t::operator [];
+
+		json() = default;
+
+		json(object_t<TConfig>&& rhs) :	base_t(std::move(rhs))
+		{
+		}
 
 		void operator<<(const std::istream& input)
 		{
@@ -528,10 +548,13 @@ namespace json17
 		template <typename It>
 		auto parse_impl(It f, It l)
 		{
-			namespace x3 = boost::spirit::x3;
+			namespace qi = boost::spirit::qi;
+
+			static const skipper<It> s{};
+			static const parser<TConfig, It, skipper<It>> p{};
 
 			object_t<TConfig> obj;
-			const auto ok = x3::parse(f, l, x3::skip(x3::space)[parser<TConfig>::r_object], obj);
+			const auto ok = qi::phrase_parse(f, l, p, s, obj);
 			if (ok)
 			{
 				return obj;
